@@ -1,0 +1,43 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+.smooth-transition {
+  transition: all 0.3s ease;
+}
+
+.hover-lift:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+}
+
+.chunk-text {
+  font-size: 18px;
+  line-height: 1.8;
+}
+
+.sentence-current {
+  background-color: rgba(59, 130, 246, 0.1);
+  border-left: 4px solid #3b82f6;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+
+.sentence-reveal {
+  opacity: 0.6;
+}
+
+.floating-reminder {
+  animation: fadeInOut 30s infinite;
+}
+
+@keyframes fadeInOut {
+  0%, 90%, 100% { opacity: 0; transform: translateX(100%); }
+  10%, 80% { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes fadeOut {
+  to { opacity: 0; transform: translateX(100%); }
+}
