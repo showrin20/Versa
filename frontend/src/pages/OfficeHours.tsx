@@ -17,19 +17,18 @@ const CAT = {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const todayKey = () => new Date().toISOString().split("T")[0];
 const nowHHMM = () => new Date().toTimeString().substring(0, 5);
-const nowHHMMSS = () => new Date().toTimeString().substring(0, 8);
-const t2h = (t) => { const [h, m] = t.split(":").map(Number); return h + m / 60; };
-const schedHrs = (s) => Math.max(0, t2h(s.endTime) - t2h(s.startTime));
+const t2h = (t: string): number => { const [h, m] = t.split(":").map(Number); return h + m / 60; };
+const schedHrs = (s: { startTime: string; endTime: string }): number => Math.max(0, t2h(s.endTime) - t2h(s.startTime));
 
-const fmtDur = (hrs) => {
+const fmtDur = (hrs: number): string => {
   const h = Math.floor(Math.abs(hrs));
   const m = Math.round((Math.abs(hrs) - h) * 60);
   return `${h}h ${String(m).padStart(2, "0")}m`;
 };
 
 const ls = {
-  get: (k, def = null) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : def; } catch { return def; } },
-  set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { } },
+  get: <T,>(k: string, def: T): T => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : def; } catch { return def; } },
+  set: (k: string, v: any) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { } },
 };
 
 const parseNotesAndTasks = (raw = "") => {
@@ -49,20 +48,20 @@ const parseNotesAndTasks = (raw = "") => {
 // ─── Component ────────────────────────────────────────────────────────────────
 export default function OfficeHours() {
   const [now, setNow] = useState(new Date());
-  const [entries, setEntries] = useState(() => ls.get(ENTRIES_KEY, []));
+  const [entries, setEntries] = useState<any[]>(() => ls.get(ENTRIES_KEY, []));
   const [schedule, setSchedule] = useState(() => ls.get(SCHEDULE_KEY, DEFAULT_SCHED));
   const [draftSched, setDraftSched] = useState(schedule);
   const [showSchedEd, setShowSchedEd] = useState(false);
-  const [tasks, setTasks] = useState(() => ls.get(TASKS_PREFIX + todayKey(), []));
+  const [tasks, setTasks] = useState<any[]>(() => ls.get(TASKS_PREFIX + todayKey(), []));
   const [newTask, setNewTask] = useState("");
-  const [newCat, setNewCat] = useState("other");
+  const [newCat, setNewCat] = useState<keyof typeof CAT>("other");
   const [tab, setTab] = useState("today");
-  const [expanded, setExpanded] = useState(null);
+  const [expanded, setExpanded] = useState<number | null>(null);
   const [notes, setNotes] = useState("");
-  const notesTimer = useRef(null);
+  const notesTimer = useRef<NodeJS.Timeout | null>(null);
 
   // Derive today's entry from entries array
-  const todayEntry = entries.find(e => e.date === todayKey()) || null;
+  const todayEntry = entries.find((e: any) => e.date === todayKey()) || null;
   const isCheckedIn = !!(todayEntry?.checkIn && !todayEntry?.checkOut);
   const isOnBreak = !!(todayEntry?.breakStart && !todayEntry?.breakEnd);
 
@@ -78,19 +77,19 @@ export default function OfficeHours() {
   }, []);
 
   // ── Entry helpers ──────────────────────────────────────────────────────────
-  const updateEntry = (date, patch) => {
-    setEntries(prev => {
-      const exists = prev.find(e => e.date === date);
+  const updateEntry = (date: string, patch: any) => {
+    setEntries((prev: any[]) => {
+      const exists = prev.find((e: any) => e.date === date);
       let next;
       if (exists) {
-        next = prev.map(e => e.date === date ? { ...e, ...patch } : e);
+        next = prev.map((e: any) => e.date === date ? { ...e, ...patch } : e);
       } else {
         next = [{
           id: Date.now(), date, checkIn: null, checkOut: null,
           breakStart: null, breakEnd: null, breakMins: 0,
           totalHours: 0, notes: ""
         }, ...prev]
-          .map(e => e.date === date ? { ...e, ...patch } : e);
+          .map((e: any) => e.date === date ? { ...e, ...patch } : e);
       }
       ls.set(ENTRIES_KEY, next);
       return next;
@@ -111,9 +110,9 @@ export default function OfficeHours() {
     const co = t2h(checkOut);
     const totalHours = Math.max(0, co - ci - (todayEntry.breakMins || 0) / 60);
     // bundle tasks into notes
-    const currentTasks = ls.get(TASKS_PREFIX + todayKey(), []);
+    const currentTasks: any[] = ls.get(TASKS_PREFIX + todayKey(), []);
     const taskLine = currentTasks.length
-      ? "\n\n--- Tasks ---\n" + currentTasks.map(t => `[${t.category}] ${t.time} — ${t.description}`).join("\n")
+      ? "\n\n--- Tasks ---\n" + currentTasks.map((t: any) => `[${t.category}] ${t.time} — ${t.description}`).join("\n")
       : "";
     updateEntry(todayKey(), { checkOut, totalHours, notes: (notes || "") + taskLine });
   };
@@ -132,7 +131,7 @@ export default function OfficeHours() {
     updateEntry(todayKey(), { breakEnd, breakMins: (todayEntry.breakMins || 0) + added });
   };
 
-  const handleNotesChange = (val) => {
+  const handleNotesChange = (val: string) => {
     setNotes(val);
     if (notesTimer.current) clearTimeout(notesTimer.current);
     notesTimer.current = setTimeout(() => updateEntry(todayKey(), { notes: val }), 600);
@@ -147,8 +146,8 @@ export default function OfficeHours() {
     setNewTask("");
   };
 
-  const removeTask = (id) => {
-    const updated = tasks.filter(t => t.id !== id);
+  const removeTask = (id: string) => {
+    const updated = tasks.filter((t: any) => t.id !== id);
     setTasks(updated);
     ls.set(TASKS_PREFIX + todayKey(), updated);
   };
@@ -184,8 +183,8 @@ export default function OfficeHours() {
   const weekTotal = () => {
     const w = new Date(); w.setDate(w.getDate() - 7);
     return entries
-      .filter(e => new Date(e.date) >= w)
-      .reduce((s, e) => s + (e.totalHours || 0), 0);
+      .filter((e: any) => new Date(e.date) >= w)
+      .reduce((s: number, e: any) => s + (e.totalHours || 0), 0);
   };
 
   const greeting = () => {
@@ -261,8 +260,8 @@ export default function OfficeHours() {
               {[["Start time", "startTime"], ["End time", "endTime"]].map(([label, key]) => (
                 <div key={key}>
                   <label className="block text-xs text-slate-400 mb-1.5 font-medium">{label}</label>
-                  <input type="time" value={draftSched[key]}
-                    onChange={e => setDraftSched(d => ({ ...d, [key]: e.target.value }))}
+                  <input type="time" value={(draftSched as any)[key]}
+                    onChange={e => setDraftSched((d: any) => ({ ...d, [key]: e.target.value }))}
                     className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2.5 text-slate-100 font-mono text-sm focus:outline-none focus:border-blue-500 transition-colors"
                   />
                 </div>
@@ -483,12 +482,12 @@ export default function OfficeHours() {
                 </div>
                 <div className="flex flex-wrap gap-1.5">
                   {Object.keys(CAT).map(cat => (
-                    <button key={cat} onClick={() => setNewCat(cat)}
+                    <button key={cat} onClick={() => setNewCat(cat as keyof typeof CAT)}
                       className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${newCat === cat
-                          ? CAT[cat].color + " ring-1 ring-current"
+                          ? CAT[cat as keyof typeof CAT].color + " ring-1 ring-current"
                           : "bg-slate-800 text-slate-500 border-slate-700 hover:border-slate-600"
                         }`}>
-                      {CAT[cat].label}
+                      {CAT[cat as keyof typeof CAT].label}
                     </button>
                   ))}
                 </div>
@@ -499,15 +498,15 @@ export default function OfficeHours() {
                   <div className="text-center py-10 text-slate-600 text-sm">
                     No tasks yet — log what you've been working on!
                   </div>
-                ) : tasks.map(task => (
+                ) : tasks.map((task: any) => (
                   <div key={task.id}
                     className="flex items-start gap-3 bg-slate-800/50 rounded-lg px-3 py-2.5 group hover:bg-slate-800/80 transition-colors">
-                    <div className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${CAT[task.category]?.dot || "bg-slate-400"}`} />
+                    <div className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${CAT[task.category as keyof typeof CAT]?.dot || "bg-slate-400"}`} />
                     <div className="flex-1 min-w-0">
                       <div className="text-sm text-slate-200 leading-snug">{task.description}</div>
                       <div className="flex items-center gap-2 mt-1">
-                        <span className={`text-xs px-2 py-0.5 rounded-full border ${CAT[task.category]?.color || ""}`}>
-                          {CAT[task.category]?.label || task.category}
+                        <span className={`text-xs px-2 py-0.5 rounded-full border ${CAT[task.category as keyof typeof CAT]?.color || ""}`}>
+                          {CAT[task.category as keyof typeof CAT]?.label || task.category}
                         </span>
                         <span className="text-xs text-slate-500 font-mono">{task.time}</span>
                       </div>
@@ -589,14 +588,14 @@ export default function OfficeHours() {
                             <div>
                               <p className="text-xs text-slate-500 uppercase tracking-wide font-semibold mb-2">Tasks completed</p>
                               <div className="space-y-1.5">
-                                {entryTasks.map(task => (
+                                {entryTasks.map((task: any) => (
                                   <div key={task.id} className="flex items-start gap-3 bg-slate-800/60 rounded-lg px-3 py-2.5">
-                                    <div className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${CAT[task.category]?.dot || "bg-slate-400"}`} />
+                                    <div className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${CAT[task.category as keyof typeof CAT]?.dot || "bg-slate-400"}`} />
                                     <div className="flex-1">
                                       <div className="text-sm text-slate-200">{task.description}</div>
                                       <div className="flex gap-2 mt-1">
-                                        <span className={`text-xs px-2 py-0.5 rounded-full border ${CAT[task.category]?.color || "bg-slate-700 text-slate-400 border-slate-600"}`}>
-                                          {CAT[task.category]?.label || task.category}
+                                        <span className={`text-xs px-2 py-0.5 rounded-full border ${CAT[task.category as keyof typeof CAT]?.color || "bg-slate-700 text-slate-400 border-slate-600"}`}>
+                                          {CAT[task.category as keyof typeof CAT]?.label || task.category}
                                         </span>
                                         <span className="text-xs text-slate-500 font-mono">{task.time}</span>
                                       </div>

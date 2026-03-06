@@ -5,7 +5,6 @@ import type { PDFBook, ReadingSession, ReadingSessionCreate } from '../types';
 declare global {
   interface Window {
     pdfjsLib: any;
-    speechSynthesis: SpeechSynthesis;
   }
 }
 
