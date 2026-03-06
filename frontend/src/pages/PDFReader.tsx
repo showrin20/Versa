@@ -294,7 +294,14 @@ const PDFReader: React.FC = () => {
       setIsProcessing(true);
       setLoadingText(`Opening "${book.name}"...`);
       setIsReading(true); setActiveBook(book); setChunks([]);
-      setAudioDownloadUrl((book as any).audiobook_url || null);
+      
+      // Check if audiobook exists for this book
+      if ((book as any).audiobook_path) {
+        setAudioDownloadUrl(`${API_BASE_URL}/audiobooks/book/${book.id}/download`);
+      } else {
+        setAudioDownloadUrl(null);
+      }
+      
       const session = await readingSessionsAPI.create({ book_id: book.id, chunks_read: 0, time_spent: 0 } as ReadingSessionCreate);
       setStoredSession(session); setSessionStartTime(new Date());
       const response = await fetch(`${API_BASE_URL}/pdf-books/${book.id}/download`);
@@ -441,25 +448,27 @@ const PDFReader: React.FC = () => {
   const downloadExistingAudiobook = () => {
     if (!audioDownloadUrl || !activeBook) return;
     const a = document.createElement('a');
-    a.href = audioDownloadUrl; a.download = `${activeBook.name}.mp3`; a.click();
+    // If it's a relative URL, prepend the backend base
+    const fullUrl = audioDownloadUrl.startsWith('http') ? audioDownloadUrl : `http://localhost:8000${audioDownloadUrl}`;
+    a.href = fullUrl; a.download = `${activeBook.name}.mp3`; a.click();
   };
 
   const generateAudiobook = async () => {
     if (!activeBook) return;
     try {
       setIsGeneratingAudio(true); setAudioGenProgress(0);
-      
+
       // Collect all text from chunks to send to backend
       const fullText = chunks.map(chunk => chunk.text).join('\n\n');
-      
+
       const createRes = await fetch(`${API_BASE_URL}/audiobooks/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          book_id: activeBook.id, 
-          format: 'mp3', 
-          voice: selectedNarrator.backendVoice, 
-          style: selectedNarrator.backendStyle, 
+        body: JSON.stringify({
+          book_id: activeBook.id,
+          format: 'mp3',
+          voice: selectedNarrator.backendVoice,
+          style: selectedNarrator.backendStyle,
           narrator_id: selectedNarrator.id,
           text: fullText  // Send extracted text directly
         }),
@@ -477,10 +486,14 @@ const PDFReader: React.FC = () => {
         const status = await statusRes.json();
         setAudioGenProgress(Number(status.progress || 0));
         if (status.state === 'completed') {
-          const url = status.download_url || status.audio_url;
-          if (!url) throw new Error('Generation finished but no download URL was returned');
-          setAudioDownloadUrl(url); setAudioGenProgress(100); setIsGeneratingAudio(false);
-          const anchor = document.createElement('a'); anchor.href = url; anchor.download = `${activeBook.name}.mp3`; anchor.click();
+          // Use the book-specific download endpoint
+          const bookDownloadUrl = `${API_BASE_URL}/audiobooks/book/${activeBook.id}/download`;
+          setAudioDownloadUrl(bookDownloadUrl); 
+          setAudioGenProgress(100); 
+          setIsGeneratingAudio(false);
+          
+          // Reload books to get updated audiobook_path
+          await loadBooks();
           return;
         }
         if (status.state === 'failed') throw new Error(status.error || 'Audiobook generation failed');
@@ -796,6 +809,69 @@ const PDFReader: React.FC = () => {
         }
         @keyframes spin { to { transform: rotate(360deg); } }
 
+        .download-banner {
+          background: linear-gradient(135deg, rgba(99,102,241,0.12) 0%, rgba(139,92,246,0.12) 50%, rgba(16,185,129,0.1) 100%);
+          border: 1px solid rgba(99,102,241,0.3);
+          border-radius: 16px;
+          padding: 1.2rem 1.4rem;
+          margin-bottom: 0.85rem;
+          display: flex;
+          align-items: center;
+          gap: 1rem;
+          flex-wrap: wrap;
+          animation: bannerSlideIn 0.5s ease-out;
+          position: relative;
+          overflow: hidden;
+        }
+        .download-banner::before {
+          content: '';
+          position: absolute;
+          inset: 0;
+          background: linear-gradient(90deg, transparent 0%, rgba(99,102,241,0.05) 50%, transparent 100%);
+          animation: bannerShimmer 3s ease-in-out infinite;
+        }
+        @keyframes bannerSlideIn {
+          from { opacity: 0; transform: translateY(-10px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes bannerShimmer {
+          0%, 100% { opacity: 0; }
+          50% { opacity: 1; }
+        }
+        .download-btn {
+          background: linear-gradient(135deg, #10B981, #059669);
+          color: white;
+          border: none;
+          border-radius: 12px;
+          cursor: pointer;
+          font-weight: 700;
+          font-size: 0.92rem;
+          padding: 0.75rem 1.5rem;
+          transition: all 0.2s ease;
+          box-shadow: 0 6px 20px rgba(16,185,129,0.3);
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          white-space: nowrap;
+          position: relative;
+          z-index: 1;
+        }
+        .download-btn:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 10px 28px rgba(16,185,129,0.4);
+        }
+        .download-btn:active {
+          transform: translateY(0);
+        }
+        .download-btn-icon {
+          display: inline-block;
+          animation: downloadBounce 1.5s ease-in-out infinite;
+        }
+        @keyframes downloadBounce {
+          0%, 100% { transform: translateY(0); }
+          50% { transform: translateY(3px); }
+        }
+
         .settings-panel {
           display: grid;
           grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -912,13 +988,35 @@ const PDFReader: React.FC = () => {
                 const totalTime = getTotalTime(book.id);
                 const sessionsCount = getBookSessions(book.id).length;
                 const isEditing = editingBookId === book.id;
-                
+                const hasAudiobook = !!(book as any).audiobook_path;
+
                 return (
                   <div key={book.id} className="glass-card" style={{ overflow: 'hidden' }}>
                     <div style={{ height: 5, background: 'var(--accent-gradient)' }} />
                     <div style={{ padding: '1.2rem' }}>
-                      <div style={{ fontSize: '1.8rem', marginBottom: '0.45rem' }}>{(book as any).status === 'completed' ? '✅' : '📘'}</div>
-                      
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.45rem' }}>
+                        <div style={{ fontSize: '1.8rem' }}>{(book as any).status === 'completed' ? '✅' : '📘'}</div>
+                        {hasAudiobook && (
+                          <div 
+                            style={{ 
+                              fontSize: '0.7rem', 
+                              padding: '0.3rem 0.6rem', 
+                              background: 'linear-gradient(135deg, rgba(16,185,129,0.15), rgba(5,150,105,0.15))',
+                              border: '1px solid rgba(16,185,129,0.3)',
+                              borderRadius: '6px',
+                              color: '#10B981',
+                              fontWeight: 600,
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '0.3rem'
+                            }}
+                            title="Audiobook available"
+                          >
+                            🎧 Audio
+                          </div>
+                        )}
+                      </div>
+
                       {isEditing ? (
                         <div style={{ marginBottom: '0.9rem' }}>
                           <input
@@ -965,7 +1063,7 @@ const PDFReader: React.FC = () => {
                           <p style={{ color: 'var(--text-muted-2)', fontSize: '0.76rem', margin: '0 0 0.9rem 0' }}>{book.original_filename}</p>
                         </>
                       )}
-                      
+
                       <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)', fontSize: '0.78rem', marginBottom: '0.5rem' }}>
                         <span>{Number((book as any).progress_percentage || 0).toFixed(0)}% read</span>
                         <span>{totalTime}m · {sessionsCount} sessions</span>
@@ -973,13 +1071,13 @@ const PDFReader: React.FC = () => {
                       <div className="progress-bar" style={{ height: 6, marginBottom: '0.9rem' }}>
                         <div style={{ width: `${Number((book as any).progress_percentage || 0)}%` }} />
                       </div>
-                      
+
                       <div style={{ display: 'flex', gap: '0.5rem' }}>
                         <button className="primary-btn" style={{ flex: 1, padding: '0.75rem 1rem' }} onClick={() => void startReading(book)}>
                           {(book as any).current_chunk ? 'Continue reading' : 'Start reading'}
                         </button>
                       </div>
-                      
+
                       <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.6rem' }}>
                         <button
                           className="secondary-btn"
@@ -1059,6 +1157,54 @@ const PDFReader: React.FC = () => {
                     <div style={{ width: `${progressPct}%` }} />
                   </div>
                 </div>
+
+                {/* ─── Download Banner (shown after generation completes) ─── */}
+                {audioDownloadUrl && !isGeneratingAudio && (
+                  <div className="download-banner">
+                    <div style={{ fontSize: '2rem', flexShrink: 0, position: 'relative', zIndex: 1 }}>🎧</div>
+                    <div style={{ flex: 1, minWidth: 0, position: 'relative', zIndex: 1 }}>
+                      <div style={{ fontWeight: 700, color: 'var(--text-main)', fontSize: '0.95rem', marginBottom: '0.2rem' }}>
+                        Audiobook Ready!
+                      </div>
+                      <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                        <span style={{ fontWeight: 600, color: '#A5B4FC' }}>{activeBook?.name}</span>
+                        {' · '}
+                        Narrated by {selectedNarrator.emoji} {selectedNarrator.name}
+                      </div>
+                    </div>
+                    <button className="download-btn" onClick={downloadExistingAudiobook}>
+                      <span className="download-btn-icon">⬇</span> Download MP3
+                    </button>
+                    <button
+                      className="secondary-btn"
+                      style={{ padding: '0.6rem 0.9rem', fontSize: '0.8rem', position: 'relative', zIndex: 1 }}
+                      onClick={() => setAudioDownloadUrl(null)}
+                      title="Dismiss"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                )}
+
+                {/* ─── Audio Generation Progress Banner ─── */}
+                {isGeneratingAudio && (
+                  <div className="download-banner" style={{ borderColor: 'rgba(139,92,246,0.3)' }}>
+                    <div style={{ fontSize: '2rem', flexShrink: 0, position: 'relative', zIndex: 1 }}>
+                      <span style={{ display: 'inline-block', animation: 'spin 2s linear infinite' }}>🎵</span>
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0, position: 'relative', zIndex: 1 }}>
+                      <div style={{ fontWeight: 700, color: 'var(--text-main)', fontSize: '0.95rem', marginBottom: '0.45rem' }}>
+                        Generating Audiobook...
+                      </div>
+                      <div className="progress-bar" style={{ height: 8, marginBottom: '0.3rem' }}>
+                        <div style={{ width: `${audioGenProgress}%` }} />
+                      </div>
+                      <div style={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>
+                        {audioGenProgress}% · {selectedNarrator.emoji} {selectedNarrator.name} voice
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* Settings panel (collapsible) */}
                 {showSettings && (
@@ -1207,54 +1353,54 @@ const PDFReader: React.FC = () => {
 
 
 
-                  {/* LEFT: Large book view + page nav */}
-                  <div className="book-panel">
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-                      <span style={{ color: 'var(--text-muted-2)', fontSize: '0.76rem', fontWeight: 600, letterSpacing: '0.1em' }}>PDF VIEW</span>
-                      <button className="secondary-btn" style={{ padding: '0.28rem 0.7rem', fontSize: '0.76rem' }} onClick={() => setShowPdfView((v) => !v)}>
-                        {showPdfView ? 'Hide' : 'Show'}
-                      </button>
-                    </div>
-
-                    {showPdfView && (
-                      <div className={`book-shell ${pageAnim === 'forward' ? 'book-page-forward' : pageAnim === 'backward' ? 'book-page-backward' : ''}`}>
-                        <div className="book-spine-line" />
-                        <div className="book-spread">
-                          <div className="book-page left">
-                            <canvas ref={leftCanvasRef} className="page-canvas" />
-                            <div className="book-page-num">{currentPageNum}</div>
-                          </div>
-                          <div className="book-page right">
-                            <canvas ref={rightCanvasRef} className="page-canvas" />
-                            <div className="book-page-num">{rightPage}</div>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Page navigation right below book */}
-                    <div className="book-nav-row" style={{ padding: '0.7rem 0 0' }}>
-                      <button className="book-nav-btn" style={{ padding: '0.6rem 1.4rem', fontSize: '0.9rem' }} onClick={prevItem} disabled={isAtStart}>← Prev</button>
-                      <div style={{ textAlign: 'center' }}>
-                        <div style={{ color: 'var(--text-muted)', fontSize: '0.9rem', fontWeight: 700 }}>
-                          {currentChunk + 1} <span style={{ color: 'var(--text-muted-2)', fontWeight: 400 }}>/ {chunks.length}</span>
-                        </div>
-                        <div style={{ color: 'var(--text-muted-2)', fontSize: '0.72rem' }}>chunk position</div>
-                      </div>
-                      <button className="book-nav-btn accent" style={{ padding: '0.6rem 1.4rem', fontSize: '0.9rem' }} onClick={nextItem} disabled={isAtEnd}>Next →</button>
-                    </div>
-
-                    {/* Quick page jump */}
-                    <div style={{ marginTop: '0.55rem', display: 'flex', gap: '0.45rem', alignItems: 'center' }}>
-                      <div style={{ color: 'var(--text-muted-2)', fontSize: '0.75rem', whiteSpace: 'nowrap' }}>Pg {currentPageNum}/{maxPage}</div>
-                      <div style={{ flex: 1 }}>
-                        <div className="progress-bar" style={{ height: 4 }}>
-                          <div style={{ width: `${progressPct}%` }} />
-                        </div>
-                      </div>
-                      <button className="secondary-btn" style={{ padding: '0.28rem 0.6rem', fontSize: '0.73rem' }} onClick={() => setShowPageJump(true)}>↗</button>
-                    </div>
+                {/* LEFT: Large book view + page nav */}
+                <div className="book-panel">
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                    <span style={{ color: 'var(--text-muted-2)', fontSize: '0.76rem', fontWeight: 600, letterSpacing: '0.1em' }}>PDF VIEW</span>
+                    <button className="secondary-btn" style={{ padding: '0.28rem 0.7rem', fontSize: '0.76rem' }} onClick={() => setShowPdfView((v) => !v)}>
+                      {showPdfView ? 'Hide' : 'Show'}
+                    </button>
                   </div>
+
+                  {showPdfView && (
+                    <div className={`book-shell ${pageAnim === 'forward' ? 'book-page-forward' : pageAnim === 'backward' ? 'book-page-backward' : ''}`}>
+                      <div className="book-spine-line" />
+                      <div className="book-spread">
+                        <div className="book-page left">
+                          <canvas ref={leftCanvasRef} className="page-canvas" />
+                          <div className="book-page-num">{currentPageNum}</div>
+                        </div>
+                        <div className="book-page right">
+                          <canvas ref={rightCanvasRef} className="page-canvas" />
+                          <div className="book-page-num">{rightPage}</div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Page navigation right below book */}
+                  <div className="book-nav-row" style={{ padding: '0.7rem 0 0' }}>
+                    <button className="book-nav-btn" style={{ padding: '0.6rem 1.4rem', fontSize: '0.9rem' }} onClick={prevItem} disabled={isAtStart}>← Prev</button>
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{ color: 'var(--text-muted)', fontSize: '0.9rem', fontWeight: 700 }}>
+                        {currentChunk + 1} <span style={{ color: 'var(--text-muted-2)', fontWeight: 400 }}>/ {chunks.length}</span>
+                      </div>
+                      <div style={{ color: 'var(--text-muted-2)', fontSize: '0.72rem' }}>chunk position</div>
+                    </div>
+                    <button className="book-nav-btn accent" style={{ padding: '0.6rem 1.4rem', fontSize: '0.9rem' }} onClick={nextItem} disabled={isAtEnd}>Next →</button>
+                  </div>
+
+                  {/* Quick page jump */}
+                  <div style={{ marginTop: '0.55rem', display: 'flex', gap: '0.45rem', alignItems: 'center' }}>
+                    <div style={{ color: 'var(--text-muted-2)', fontSize: '0.75rem', whiteSpace: 'nowrap' }}>Pg {currentPageNum}/{maxPage}</div>
+                    <div style={{ flex: 1 }}>
+                      <div className="progress-bar" style={{ height: 4 }}>
+                        <div style={{ width: `${progressPct}%` }} />
+                      </div>
+                    </div>
+                    <button className="secondary-btn" style={{ padding: '0.28rem 0.6rem', fontSize: '0.73rem' }} onClick={() => setShowPageJump(true)}>↗</button>
+                  </div>
+                </div>
               </>
 
 

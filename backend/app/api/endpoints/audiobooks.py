@@ -1,6 +1,8 @@
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends
+from fastapi.responses import FileResponse
 from typing import Dict, Any, Optional
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 import uuid
 import os
 import re
@@ -8,6 +10,8 @@ from pathlib import Path
 from pydub import AudioSegment
 import asyncio
 import edge_tts
+from app.core.database import get_db
+from app.crud import crud
 
 router = APIRouter()
 
@@ -28,9 +32,21 @@ class AudiobookGenerationRequest(BaseModel):
 
 
 @router.post("/start")
-async def start_audiobook_generation(request: AudiobookGenerationRequest):
+async def start_audiobook_generation(request: AudiobookGenerationRequest, db: Session = Depends(get_db)):
+    # Get book details for naming
+    book = crud.get_pdf_book(db, book_id=request.book_id)
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    
     job_id = str(uuid.uuid4())
-    JOBS[job_id] = {"state": "queued", "progress": 0, "error": None, "audio_path": None}
+    JOBS[job_id] = {
+        "state": "queued", 
+        "progress": 0, 
+        "error": None, 
+        "audio_path": None,
+        "book_id": request.book_id,
+        "book_name": book.name
+    }
 
     # background run
     asyncio.create_task(_run_generation(
@@ -39,7 +55,9 @@ async def start_audiobook_generation(request: AudiobookGenerationRequest):
         request.voice, 
         request.style, 
         request.format,
-        request.text
+        request.text,
+        book.name,
+        db
     ))
     return {"job_id": job_id}
 
@@ -51,11 +69,56 @@ def audiobook_status(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found")
     resp = {k: v for k, v in job.items() if k != "_internal"}
     if job.get("audio_path"):
-        resp["download_url"] = f"/data/audiobooks/{os.path.basename(job['audio_path'])}"
+        resp["download_url"] = f"/api/v1/audiobooks/{job_id}/download"
     return resp
 
 
-async def _run_generation(job_id: str, book_id: int, voice: str, style: str, fmt: str = "mp3", text: Optional[str] = None):
+@router.get("/{job_id}/download")
+def download_audiobook(job_id: str):
+    """Download the completed audiobook file."""
+    job = JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job["state"] != "completed" or not job.get("audio_path"):
+        raise HTTPException(status_code=400, detail="Audiobook not ready for download")
+    
+    audio_path = Path(job["audio_path"])
+    if not audio_path.exists():
+        raise HTTPException(status_code=404, detail="Audiobook file not found on disk")
+    
+    filename = audio_path.name
+    return FileResponse(
+        path=str(audio_path),
+        media_type="audio/mpeg",
+        filename=filename,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
+
+
+@router.get("/book/{book_id}/download")
+def download_book_audiobook(book_id: int, db: Session = Depends(get_db)):
+    """Download the audiobook for a specific book."""
+    book = crud.get_pdf_book(db, book_id=book_id)
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    
+    if not book.audiobook_path:
+        raise HTTPException(status_code=404, detail="No audiobook generated for this book yet")
+    
+    audio_path = Path(book.audiobook_path)
+    if not audio_path.exists():
+        raise HTTPException(status_code=404, detail="Audiobook file not found on disk")
+    
+    filename = audio_path.name
+    return FileResponse(
+        path=str(audio_path),
+        media_type="audio/mpeg",
+        filename=filename,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
+
+
+async def _run_generation(job_id: str, book_id: int, voice: str, style: str, fmt: str = "mp3", text: Optional[str] = None, book_name: str = "audiobook", db: Session = None):
     JOBS[job_id]["state"] = "running"
     try:
         # Use provided text if available, otherwise look for extracted file
@@ -209,7 +272,18 @@ async def _run_generation(job_id: str, book_id: int, voice: str, style: str, fmt
                 print(f"[Audiobook Job {job_id}] Error concatenating {fpath.name}: {str(concat_error)}")
                 raise RuntimeError(f"Failed to concatenate audio file {idx}: {str(concat_error)}")
 
-        out_file = OUTPUT_DIR / f"audiobook_{job_id}.{fmt}"
+        # Use book name for the audiobook filename (sanitize it)
+        sanitized_book_name = re.sub(r'[^\w\s-]', '', book_name).strip().replace(' ', '_')
+        if not sanitized_book_name:
+            sanitized_book_name = f"book_{book_id}"
+        out_file = OUTPUT_DIR / f"{sanitized_book_name}.{fmt}"
+        
+        # If file exists, append a number to make it unique
+        counter = 1
+        while out_file.exists():
+            out_file = OUTPUT_DIR / f"{sanitized_book_name}_{counter}.{fmt}"
+            counter += 1
+        
         if combined is None:
             raise RuntimeError("No audio was generated")
         
@@ -228,6 +302,22 @@ async def _run_generation(job_id: str, book_id: int, voice: str, style: str, fmt
         JOBS[job_id]["state"] = "completed"
         JOBS[job_id]["progress"] = 100
         JOBS[job_id]["audio_path"] = str(out_file)
+        
+        # Update the book record in the database with the audiobook path
+        if db:
+            try:
+                from app.core.database import SessionLocal
+                # Create a new session since we're in an async task
+                db_session = SessionLocal()
+                try:
+                    crud.update_pdf_book(db_session, book_id=book_id, book_update={"audiobook_path": str(out_file)})
+                    db_session.commit()
+                    print(f"[Audiobook Job {job_id}] Updated book {book_id} with audiobook path")
+                finally:
+                    db_session.close()
+            except Exception as db_error:
+                print(f"[Audiobook Job {job_id}] Failed to update book record: {str(db_error)}")
+        
         print(f"[Audiobook Job {job_id}] Generation completed successfully")
     except Exception as e:
         print(f"[Audiobook Job {job_id}] FAILED: {str(e)}")

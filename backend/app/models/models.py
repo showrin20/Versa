@@ -44,6 +44,7 @@ class PDFBook(Base):
     progress_percentage = Column(Float, default=0.0)
     reading_mode = Column(String, default="chunk")  # chunk or sentence
     status = Column(String, default="reading")  # reading, completed, paused
+    audiobook_path = Column(String, nullable=True)  # Path to generated audiobook file
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

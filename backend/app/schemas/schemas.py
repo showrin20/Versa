@@ -71,6 +71,7 @@ class PDFBookBase(BaseModel):
     progress_percentage: float = 0.0
     reading_mode: str = "chunk"
     status: str = "reading"
+    audiobook_path: Optional[str] = None
 
 class PDFBookCreate(BaseModel):
     name: str
@@ -83,6 +84,7 @@ class PDFBookUpdate(BaseModel):
     progress_percentage: Optional[float] = None
     reading_mode: Optional[str] = None
     status: Optional[str] = None
+    audiobook_path: Optional[str] = None
 
 class PDFBook(PDFBookBase):
     id: int
