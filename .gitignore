@@ -47,3 +47,7 @@ node_modules/
 # Python cache (if any in root)
 __pycache__/
 *.pyc
+
+data/
+
+scripts/

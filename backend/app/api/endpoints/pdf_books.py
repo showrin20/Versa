@@ -25,6 +25,23 @@ def read_pdf_book(book_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="PDF book not found")
     return book
 
+from fastapi.responses import FileResponse
+
+@router.get("/{book_id}/download")
+def download_pdf_book(book_id: int, db: Session = Depends(get_db)):
+    """Download a specific PDF book"""
+    book = crud.get_pdf_book(db, book_id=book_id)
+    if book is None:
+        raise HTTPException(status_code=404, detail="PDF book not found")
+    if not os.path.exists(book.file_path):
+        raise HTTPException(status_code=404, detail="PDF file not found on server")
+    
+    return FileResponse(
+        path=book.file_path,
+        media_type="application/pdf",
+        filename=os.path.basename(book.original_filename) if hasattr(book, 'original_filename') else "book.pdf"
+    )
+
 @router.post("/upload", response_model=PDFBook)
 async def upload_pdf_book(
     file: UploadFile = File(...),

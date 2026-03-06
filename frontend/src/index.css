@@ -25,6 +25,14 @@
   font-weight: 500;
 }
 
+.dark .sentence-current {
+  background-color: rgba(59, 130, 246, 0.2);
+}
+
+.dark .hover-lift:hover {
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+}
+
 .sentence-reveal {
   opacity: 0.6;
 }

@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  # Backend service for development
+  backend-dev:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: versa-backend-dev
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONPATH=/app
+      - DATABASE_URL=sqlite:///./data/app.db
+      - RELOAD=true
+    volumes:
+      - ./backend:/app
+      - backend_data_dev:/app/data
+    networks:
+      - versa-network-dev
+    restart: unless-stopped
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+  # Frontend service for development
+  frontend-dev:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: versa-frontend-dev
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    networks:
+      - versa-network-dev
+    restart: unless-stopped
+    environment:
+      - VITE_API_URL=http://localhost:8000
+
+networks:
+  versa-network-dev:
+    driver: bridge
+
+volumes:
+  backend_data_dev:
+    driver: local

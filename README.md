@@ -57,6 +57,12 @@ A full-stack productivity platform built with React, FastAPI, and SQLite.
 - **PostCSS**: CSS processing
 - **Autoprefixer**: CSS vendor prefixing
 
+### Deployment & Infrastructure
+- **Docker**: Containerization platform
+- **Docker Compose**: Multi-container orchestration
+- **Nginx**: Web server and reverse proxy (production)
+- **Multi-stage builds**: Optimized production images
+
 ## 📦 Project Structure
 
 ```
@@ -88,12 +94,44 @@ Versa/
 
 ## 🚀 Quick Start
 
-### Prerequisites
+### Option 1: Docker (Recommended)
+
+#### Prerequisites
+- Docker Engine 20.10+
+- Docker Compose 2.0+
+
+#### Production Deployment
+```bash
+# Build and start services
+./docker-run.sh build
+./docker-run.sh up
+
+# Access the application
+# Frontend: http://localhost
+# Backend API: http://localhost:8000
+# API Documentation: http://localhost:8000/docs
+```
+
+#### Development Environment
+```bash
+# Start development environment with hot reloading
+./docker-run.sh dev
+
+# Access the application
+# Frontend: http://localhost:5173
+# Backend API: http://localhost:8000
+```
+
+See [DOCKER.md](DOCKER.md) for detailed Docker documentation.
+
+### Option 2: Local Development
+
+#### Prerequisites
 - Python 3.9 or higher
 - Node.js 16 or higher
 - npm or yarn
 
-### 1. Clone and Setup
+#### 1. Clone and Setup
 ```bash
 # Navigate to the project directory
 cd /Users/showrinrahman/Desktop/Versatile/Versa

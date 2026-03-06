@@ -124,3 +124,27 @@ def create_reading_session(db: Session, session: ReadingSessionCreate) -> Readin
 
 def get_reading_sessions_by_book(db: Session, book_id: int) -> List[ReadingSession]:
     return db.query(ReadingSession).filter(ReadingSession.book_id == book_id).all()
+
+def get_reading_sessions(db: Session, skip: int = 0, limit: int = 100) -> List[ReadingSession]:
+    return db.query(ReadingSession).offset(skip).limit(limit).all()
+
+def get_reading_session(db: Session, session_id: int) -> Optional[ReadingSession]:
+    return db.query(ReadingSession).filter(ReadingSession.id == session_id).first()
+
+def update_reading_session(db: Session, session_id: int, session_update: any) -> Optional[ReadingSession]:
+    db_session = db.query(ReadingSession).filter(ReadingSession.id == session_id).first()
+    if db_session:
+        update_data = session_update.model_dump(exclude_unset=True)
+        for field, value in update_data.items():
+            setattr(db_session, field, value)
+        db.commit()
+        db.refresh(db_session)
+    return db_session
+
+def delete_reading_session(db: Session, session_id: int) -> bool:
+    db_session = db.query(ReadingSession).filter(ReadingSession.id == session_id).first()
+    if db_session:
+        db.delete(db_session)
+        db.commit()
+        return True
+    return False

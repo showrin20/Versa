@@ -1,353 +1,624 @@
-import React, { useState, useEffect } from 'react';
-import { officeHoursAPI } from '../services/api';
-import type { OfficeHoursEntry, OfficeHoursEntryCreate } from '../types';
+import { useState, useEffect, useRef } from "react";
 
-const OfficeHours: React.FC = () => {
-  const [entries, setEntries] = useState<OfficeHoursEntry[]>([]);
-  const [todayEntry, setTodayEntry] = useState<OfficeHoursEntry | null>(null);
-  const [isCheckedIn, setIsCheckedIn] = useState(false);
-  const [isOnBreak, setIsOnBreak] = useState(false);
-  const [currentTime, setCurrentTime] = useState(new Date());
+// ─── Constants ────────────────────────────────────────────────────────────────
+const SCHEDULE_KEY = "wl_schedule";
+const ENTRIES_KEY = "wl_entries";
+const TASKS_PREFIX = "wl_tasks_";
+const DEFAULT_SCHED = { startTime: "09:00", endTime: "17:00" };
 
+const CAT = {
+  meeting: { label: "Meeting", color: "bg-blue-500/20 text-blue-400 border-blue-500/30", dot: "bg-blue-400" },
+  coding: { label: "Coding", color: "bg-emerald-500/20 text-emerald-400 border-emerald-500/30", dot: "bg-emerald-400" },
+  review: { label: "Review", color: "bg-amber-500/20 text-amber-400 border-amber-500/30", dot: "bg-amber-400" },
+  docs: { label: "Docs", color: "bg-violet-500/20 text-violet-400 border-violet-500/30", dot: "bg-violet-400" },
+  other: { label: "Other", color: "bg-slate-500/20 text-slate-400 border-slate-500/30", dot: "bg-slate-400" },
+};
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+const todayKey = () => new Date().toISOString().split("T")[0];
+const nowHHMM = () => new Date().toTimeString().substring(0, 5);
+const nowHHMMSS = () => new Date().toTimeString().substring(0, 8);
+const t2h = (t) => { const [h, m] = t.split(":").map(Number); return h + m / 60; };
+const schedHrs = (s) => Math.max(0, t2h(s.endTime) - t2h(s.startTime));
+
+const fmtDur = (hrs) => {
+  const h = Math.floor(Math.abs(hrs));
+  const m = Math.round((Math.abs(hrs) - h) * 60);
+  return `${h}h ${String(m).padStart(2, "0")}m`;
+};
+
+const ls = {
+  get: (k, def = null) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : def; } catch { return def; } },
+  set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { } },
+};
+
+const parseNotesAndTasks = (raw = "") => {
+  const sep = "\n\n--- Tasks ---\n";
+  const idx = raw.indexOf(sep);
+  if (idx === -1) return { plain: raw, tasks: [] };
+  const plain = raw.substring(0, idx);
+  const tasks = raw.substring(idx + sep.length).split("\n").filter(Boolean).map((line, i) => {
+    const m = line.match(/^\[(\w+)\] (\d{2}:\d{2}) — (.+)$/);
+    return m
+      ? { id: String(i), category: m[1], time: m[2], description: m[3] }
+      : { id: String(i), category: "other", time: "--:--", description: line };
+  });
+  return { plain, tasks };
+};
+
+// ─── Component ────────────────────────────────────────────────────────────────
+export default function OfficeHours() {
+  const [now, setNow] = useState(new Date());
+  const [entries, setEntries] = useState(() => ls.get(ENTRIES_KEY, []));
+  const [schedule, setSchedule] = useState(() => ls.get(SCHEDULE_KEY, DEFAULT_SCHED));
+  const [draftSched, setDraftSched] = useState(schedule);
+  const [showSchedEd, setShowSchedEd] = useState(false);
+  const [tasks, setTasks] = useState(() => ls.get(TASKS_PREFIX + todayKey(), []));
+  const [newTask, setNewTask] = useState("");
+  const [newCat, setNewCat] = useState("other");
+  const [tab, setTab] = useState("today");
+  const [expanded, setExpanded] = useState(null);
+  const [notes, setNotes] = useState("");
+  const notesTimer = useRef(null);
+
+  // Derive today's entry from entries array
+  const todayEntry = entries.find(e => e.date === todayKey()) || null;
+  const isCheckedIn = !!(todayEntry?.checkIn && !todayEntry?.checkOut);
+  const isOnBreak = !!(todayEntry?.breakStart && !todayEntry?.breakEnd);
+
+  // Sync notes field when todayEntry changes
   useEffect(() => {
-    loadEntries();
-    loadTodayEntry();
-    
-    // Update current time every minute
-    const timer = setInterval(() => {
-      setCurrentTime(new Date());
-    }, 60000);
+    if (todayEntry) setNotes(todayEntry.notes || "");
+  }, [todayEntry?.id]);
 
-    return () => clearInterval(timer);
+  // Clock tick
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(t);
   }, []);
 
-  const loadEntries = async () => {
-    try {
-      const allEntries = await officeHoursAPI.getAll();
-      setEntries(allEntries.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
-    } catch (error) {
-      console.error('Error loading entries:', error);
-    }
-  };
-
-  const loadTodayEntry = async () => {
-    try {
-      const today = new Date().toISOString().split('T')[0];
-      const entry = await officeHoursAPI.getByDate(today);
-      setTodayEntry(entry);
-      setIsCheckedIn(!!entry.check_in_time && !entry.check_out_time);
-      setIsOnBreak(!!entry.break_start && !entry.break_end);
-    } catch (error) {
-      // No entry for today yet
-      setTodayEntry(null);
-      setIsCheckedIn(false);
-      setIsOnBreak(false);
-    }
-  };
-
-  const handleCheckIn = async () => {
-    try {
-      const today = new Date().toISOString().split('T')[0];
-      const now = new Date().toTimeString().split(' ')[0];
-      
-      if (todayEntry) {
-        // Update existing entry
-        await officeHoursAPI.update(todayEntry.id, {
-          check_in_time: now,
-        });
+  // ── Entry helpers ──────────────────────────────────────────────────────────
+  const updateEntry = (date, patch) => {
+    setEntries(prev => {
+      const exists = prev.find(e => e.date === date);
+      let next;
+      if (exists) {
+        next = prev.map(e => e.date === date ? { ...e, ...patch } : e);
       } else {
-        // Create new entry
-        const entryData: OfficeHoursEntryCreate = {
-          date: today,
-          check_in_time: now,
-          total_hours: 0,
-          break_duration: 0,
-        };
-        await officeHoursAPI.create(entryData);
+        next = [{
+          id: Date.now(), date, checkIn: null, checkOut: null,
+          breakStart: null, breakEnd: null, breakMins: 0,
+          totalHours: 0, notes: ""
+        }, ...prev]
+          .map(e => e.date === date ? { ...e, ...patch } : e);
       }
-      
-      setIsCheckedIn(true);
-      loadTodayEntry();
-      loadEntries();
-    } catch (error) {
-      console.error('Error checking in:', error);
-    }
+      ls.set(ENTRIES_KEY, next);
+      return next;
+    });
   };
 
-  const handleCheckOut = async () => {
-    if (!todayEntry) return;
-
-    try {
-      const now = new Date().toTimeString().split(' ')[0];
-      const checkInTime = new Date(`1970-01-01T${todayEntry.check_in_time}`);
-      const checkOutTime = new Date(`1970-01-01T${now}`);
-      
-      let totalHours = (checkOutTime.getTime() - checkInTime.getTime()) / (1000 * 60 * 60);
-      totalHours -= todayEntry.break_duration / 60; // Subtract break time
-      
-      await officeHoursAPI.update(todayEntry.id, {
-        check_out_time: now,
-        total_hours: Math.max(0, totalHours),
-      });
-      
-      setIsCheckedIn(false);
-      setIsOnBreak(false);
-      loadTodayEntry();
-      loadEntries();
-    } catch (error) {
-      console.error('Error checking out:', error);
-    }
+  // ── Actions ────────────────────────────────────────────────────────────────
+  const handleCheckIn = () => {
+    const date = todayKey();
+    const checkIn = nowHHMM();
+    updateEntry(date, { checkIn, checkOut: null });
   };
 
-  const handleStartBreak = async () => {
-    if (!todayEntry) return;
-
-    try {
-      const now = new Date().toTimeString().split(' ')[0];
-      await officeHoursAPI.update(todayEntry.id, {
-        break_start: now,
-      });
-      
-      setIsOnBreak(true);
-      loadTodayEntry();
-    } catch (error) {
-      console.error('Error starting break:', error);
-    }
+  const handleCheckOut = () => {
+    if (!todayEntry?.checkIn) return;
+    const checkOut = nowHHMM();
+    const ci = t2h(todayEntry.checkIn);
+    const co = t2h(checkOut);
+    const totalHours = Math.max(0, co - ci - (todayEntry.breakMins || 0) / 60);
+    // bundle tasks into notes
+    const currentTasks = ls.get(TASKS_PREFIX + todayKey(), []);
+    const taskLine = currentTasks.length
+      ? "\n\n--- Tasks ---\n" + currentTasks.map(t => `[${t.category}] ${t.time} — ${t.description}`).join("\n")
+      : "";
+    updateEntry(todayKey(), { checkOut, totalHours, notes: (notes || "") + taskLine });
   };
 
-  const handleEndBreak = async () => {
-    if (!todayEntry || !todayEntry.break_start) return;
-
-    try {
-      const now = new Date().toTimeString().split(' ')[0];
-      const breakStart = new Date(`1970-01-01T${todayEntry.break_start}`);
-      const breakEnd = new Date(`1970-01-01T${now}`);
-      
-      const breakDuration = (breakEnd.getTime() - breakStart.getTime()) / (1000 * 60); // minutes
-      const totalBreakDuration = todayEntry.break_duration + breakDuration;
-      
-      await officeHoursAPI.update(todayEntry.id, {
-        break_end: now,
-        break_duration: totalBreakDuration,
-      });
-      
-      setIsOnBreak(false);
-      loadTodayEntry();
-    } catch (error) {
-      console.error('Error ending break:', error);
-    }
+  const handleStartBreak = () => {
+    if (!isCheckedIn) return;
+    updateEntry(todayKey(), { breakStart: nowHHMM(), breakEnd: null });
   };
 
-  const updateNotes = async (notes: string) => {
-    if (!todayEntry) return;
-
-    try {
-      await officeHoursAPI.update(todayEntry.id, { notes });
-    } catch (error) {
-      console.error('Error updating notes:', error);
-    }
+  const handleEndBreak = () => {
+    if (!todayEntry?.breakStart) return;
+    const breakEnd = nowHHMM();
+    const bs = t2h(todayEntry.breakStart);
+    const be = t2h(breakEnd);
+    const added = (be - bs) * 60;
+    updateEntry(todayKey(), { breakEnd, breakMins: (todayEntry.breakMins || 0) + added });
   };
 
-  const formatTime = (timeString?: string) => {
-    if (!timeString) return '--:--';
-    return timeString.substring(0, 5); // HH:MM format
+  const handleNotesChange = (val) => {
+    setNotes(val);
+    if (notesTimer.current) clearTimeout(notesTimer.current);
+    notesTimer.current = setTimeout(() => updateEntry(todayKey(), { notes: val }), 600);
   };
 
-  const formatDuration = (hours: number) => {
-    const h = Math.floor(hours);
-    const m = Math.round((hours - h) * 60);
-    return `${h}h ${m}m`;
+  const addTask = () => {
+    if (!newTask.trim()) return;
+    const task = { id: String(Date.now()), time: nowHHMM(), description: newTask.trim(), category: newCat };
+    const updated = [task, ...tasks];
+    setTasks(updated);
+    ls.set(TASKS_PREFIX + todayKey(), updated);
+    setNewTask("");
   };
 
+  const removeTask = (id) => {
+    const updated = tasks.filter(t => t.id !== id);
+    setTasks(updated);
+    ls.set(TASKS_PREFIX + todayKey(), updated);
+  };
+
+  const saveSchedule = () => {
+    setSchedule(draftSched);
+    ls.set(SCHEDULE_KEY, draftSched);
+    setShowSchedEd(false);
+  };
+
+  // ── Computed ───────────────────────────────────────────────────────────────
   const getCurrentDuration = () => {
-    if (!todayEntry?.check_in_time || !isCheckedIn) return 0;
-    
-    const checkInTime = new Date(`1970-01-01T${todayEntry.check_in_time}`);
-    const now = new Date(`1970-01-01T${currentTime.toTimeString().split(' ')[0]}`);
-    
-    let duration = (now.getTime() - checkInTime.getTime()) / (1000 * 60 * 60);
-    duration -= todayEntry.break_duration / 60; // Subtract break time
-    
-    return Math.max(0, duration);
+    if (!todayEntry?.checkIn) return todayEntry?.totalHours || 0;
+    if (!isCheckedIn) return todayEntry?.totalHours || 0;
+    const ci = t2h(todayEntry.checkIn);
+    const cn = now.getHours() + now.getMinutes() / 60 + now.getSeconds() / 3600;
+    return Math.max(0, cn - ci - (todayEntry.breakMins || 0) / 60);
   };
 
-  const getWeeklyTotal = () => {
-    const weekAgo = new Date();
-    weekAgo.setDate(weekAgo.getDate() - 7);
-    
+  const goalHrs = schedHrs(schedule);
+  const worked = getCurrentDuration();
+  const workedPct = goalHrs > 0 ? Math.min(100, (worked / goalHrs) * 100) : 0;
+  const remaining = Math.max(0, goalHrs - worked);
+
+  const schedPct = () => {
+    const sh = t2h(schedule.startTime), eh = t2h(schedule.endTime);
+    const ch = now.getHours() + now.getMinutes() / 60;
+    if (ch <= sh) return 0;
+    if (ch >= eh) return 100;
+    return ((ch - sh) / (eh - sh)) * 100;
+  };
+
+  const weekTotal = () => {
+    const w = new Date(); w.setDate(w.getDate() - 7);
     return entries
-      .filter(entry => new Date(entry.date) >= weekAgo)
-      .reduce((total, entry) => total + entry.total_hours, 0);
+      .filter(e => new Date(e.date) >= w)
+      .reduce((s, e) => s + (e.totalHours || 0), 0);
   };
 
-  return (
-    <div className="container mx-auto px-4 py-8">
-      <div className="text-center mb-8">
-        <h1 className="text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-purple-500 to-pink-600 mb-2">
-          Office Hours Tracker
-        </h1>
-        <p className="text-gray-600">Track your work hours with precision</p>
-      </div>
+  const greeting = () => {
+    const h = now.getHours();
+    return h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening";
+  };
 
-      {/* Current Status Card */}
-      <div className="bg-gradient-to-r from-purple-100 to-pink-100 p-6 rounded-lg mb-8 border-2 border-purple-300">
-        <div className="grid md:grid-cols-2 gap-6">
+  const statusBadge = () => {
+    if (!isCheckedIn) return { label: "Not checked in", cls: "bg-slate-800 text-slate-400 border border-slate-700" };
+    if (isOnBreak) return { label: "☕ On break", cls: "bg-amber-500/20 text-amber-300 border border-amber-500/30" };
+    return { label: "🟢 Working", cls: "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30" };
+  };
+
+  const badge = statusBadge();
+  const sp = schedPct();
+
+  // ── Render ─────────────────────────────────────────────────────────────────
+  return (
+    <div style={{ fontFamily: "'DM Sans','Segoe UI',sans-serif" }}
+      className="min-h-screen bg-slate-950 text-slate-100">
+
+      {/* ── BANNER ── */}
+      <div className="relative overflow-hidden bg-slate-900 border-b border-slate-800">
+        <div className="absolute inset-0 pointer-events-none"
+          style={{ background: "radial-gradient(ellipse 70% 120% at 60% -10%, rgba(30,64,175,0.35), transparent 65%)" }} />
+        <div className="relative max-w-5xl mx-auto px-5 py-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <div>
-            <h3 className="text-xl font-semibold text-gray-800 mb-4">Today's Status</h3>
-            
-            <div className="space-y-3">
-              <div className="flex justify-between">
-                <span className="text-gray-600">Check-in:</span>
-                <span className="font-medium">{formatTime(todayEntry?.check_in_time)}</span>
-              </div>
-              
-              <div className="flex justify-between">
-                <span className="text-gray-600">Check-out:</span>
-                <span className="font-medium">{formatTime(todayEntry?.check_out_time)}</span>
-              </div>
-              
-              <div className="flex justify-between">
-                <span className="text-gray-600">Hours Worked:</span>
-                <span className="font-medium text-purple-600">
-                  {isCheckedIn ? formatDuration(getCurrentDuration()) : formatDuration(todayEntry?.total_hours || 0)}
-                </span>
-              </div>
-              
-              <div className="flex justify-between">
-                <span className="text-gray-600">Break Time:</span>
-                <span className="font-medium">{Math.round(todayEntry?.break_duration || 0)} min</span>
-              </div>
+            <div className="flex items-center gap-2 mb-1">
+              <div className="w-7 h-7 rounded-lg bg-blue-600 flex items-center justify-center text-sm">⏱</div>
+              <span className="text-xs uppercase tracking-widest text-slate-500 font-semibold">WorkLog</span>
             </div>
+            <h1 className="text-2xl font-bold text-white">
+              {greeting()}, <span className="text-blue-400">let's get to work</span>
+            </h1>
+            <p className="text-slate-500 text-sm mt-0.5">
+              {now.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
+            </p>
           </div>
-          
-          <div className="space-y-3">
-            {!isCheckedIn ? (
-              <button
-                onClick={handleCheckIn}
-                className="w-full bg-gradient-to-r from-green-500 to-green-600 text-white py-3 rounded-lg font-semibold hover:shadow-lg smooth-transition"
-              >
-                Check In
-              </button>
-            ) : (
-              <>
-                <button
-                  onClick={handleCheckOut}
-                  className="w-full bg-gradient-to-r from-red-500 to-red-600 text-white py-3 rounded-lg font-semibold hover:shadow-lg smooth-transition"
-                >
-                  Check Out
-                </button>
-                
-                {!isOnBreak ? (
-                  <button
-                    onClick={handleStartBreak}
-                    className="w-full bg-gradient-to-r from-orange-500 to-orange-600 text-white py-3 rounded-lg font-semibold hover:shadow-lg smooth-transition"
-                  >
-                    Start Break
-                  </button>
-                ) : (
-                  <button
-                    onClick={handleEndBreak}
-                    className="w-full bg-gradient-to-r from-blue-500 to-blue-600 text-white py-3 rounded-lg font-semibold hover:shadow-lg smooth-transition"
-                  >
-                    End Break
-                  </button>
-                )}
-              </>
-            )}
-            
-            <div className="text-center">
-              <div className="text-2xl font-bold text-purple-600">
-                {currentTime.toLocaleTimeString()}
+
+          <div className="flex items-center gap-4 flex-wrap">
+            {/* Office hours pill */}
+            <button
+              onClick={() => { setDraftSched(schedule); setShowSchedEd(true); }}
+              className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-blue-500/50 rounded-xl px-4 py-2.5 transition-all group"
+            >
+              <span className="text-slate-400 text-xs">🕐 Office hours</span>
+              <span className="font-mono font-semibold text-blue-400 text-sm">
+                {schedule.startTime} – {schedule.endTime}
+              </span>
+              <span className="text-slate-600 group-hover:text-slate-300 text-xs ml-1 transition-colors">✎</span>
+            </button>
+
+            <div className="text-right">
+              <div className="text-3xl font-mono font-bold text-white tabular-nums">
+                {now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })}
               </div>
-              <div className="text-sm text-gray-600">
-                {currentTime.toLocaleDateString()}
-              </div>
+              <span className={`inline-block mt-1 px-3 py-1 rounded-full text-xs font-medium ${badge.cls}`}>
+                {badge.label}
+              </span>
             </div>
           </div>
         </div>
-        
-        {/* Notes Section */}
-        {todayEntry && (
-          <div className="mt-6 pt-6 border-t border-purple-200">
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Today's Notes
-            </label>
-            <textarea
-              defaultValue={todayEntry.notes}
-              onChange={(e) => updateNotes(e.target.value)}
-              placeholder="Add notes about your work today..."
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
-              rows={3}
-            />
+      </div>
+
+      {/* ── SCHEDULE EDITOR MODAL ── */}
+      {showSchedEd && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 px-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-full max-w-sm shadow-2xl">
+            <h3 className="font-semibold text-slate-100 text-lg mb-1">Set Office Hours</h3>
+            <p className="text-slate-500 text-sm mb-5">Your usual schedule — used for daily goal progress.</p>
+
+            <div className="grid grid-cols-2 gap-4 mb-4">
+              {[["Start time", "startTime"], ["End time", "endTime"]].map(([label, key]) => (
+                <div key={key}>
+                  <label className="block text-xs text-slate-400 mb-1.5 font-medium">{label}</label>
+                  <input type="time" value={draftSched[key]}
+                    onChange={e => setDraftSched(d => ({ ...d, [key]: e.target.value }))}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2.5 text-slate-100 font-mono text-sm focus:outline-none focus:border-blue-500 transition-colors"
+                  />
+                </div>
+              ))}
+            </div>
+
+            <div className="bg-slate-800 rounded-lg px-4 py-3 mb-4 flex justify-between items-center">
+              <span className="text-sm text-slate-400">Total scheduled</span>
+              <span className="font-mono font-bold text-slate-200">{fmtDur(schedHrs(draftSched))}</span>
+            </div>
+
+            <p className="text-xs text-slate-500 mb-2">Quick presets</p>
+            <div className="flex flex-wrap gap-2 mb-5">
+              {[
+                { label: "9:00 – 5:00", s: "09:00", e: "17:00" },
+                { label: "8:30 – 3:30", s: "08:30", e: "15:30" },
+                { label: "10:00 – 6:00", s: "10:00", e: "18:00" },
+                { label: "8:00 – 4:00", s: "08:00", e: "16:00" },
+                { label: "9:00 – 6:00", s: "09:00", e: "18:00" },
+              ].map(p => (
+                <button key={p.label}
+                  onClick={() => setDraftSched({ startTime: p.s, endTime: p.e })}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${draftSched.startTime === p.s && draftSched.endTime === p.e
+                      ? "bg-blue-600 border-blue-500 text-white"
+                      : "bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-600"
+                    }`}>
+                  {p.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex gap-3">
+              <button onClick={() => setShowSchedEd(false)}
+                className="flex-1 py-2.5 rounded-xl border border-slate-700 text-slate-400 text-sm hover:border-slate-600 transition-colors">
+                Cancel
+              </button>
+              <button onClick={saveSchedule}
+                className="flex-1 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold text-sm transition-colors">
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── MAIN ── */}
+      <div className="max-w-5xl mx-auto px-4 md:px-6 py-5 space-y-5">
+
+        {/* Stats */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {[
+            { label: "Today", value: fmtDur(worked), icon: "📅", color: "text-blue-400" },
+            { label: "This Week", value: fmtDur(weekTotal()), icon: "📊", color: "text-violet-400" },
+            { label: "Break", value: `${Math.round(todayEntry?.breakMins || 0)}m`, icon: "☕", color: "text-amber-400" },
+            { label: "Remaining", value: isCheckedIn ? fmtDur(remaining) : "—", icon: "⏳", color: "text-rose-400" },
+          ].map(s => (
+            <div key={s.label} className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex items-center gap-3">
+              <span className="text-xl">{s.icon}</span>
+              <div>
+                <div className={`text-lg font-bold font-mono ${s.color}`}>{s.value}</div>
+                <div className="text-xs text-slate-500">{s.label}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Schedule Progress */}
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h3 className="font-semibold text-slate-200 text-sm">Daily Schedule Progress</h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {schedule.startTime} – {schedule.endTime} · Goal: {fmtDur(goalHrs)}
+              </p>
+            </div>
+            <span className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${workedPct >= 100
+                ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/30"
+                : "bg-blue-500/20 text-blue-400 border-blue-500/30"
+              }`}>
+              {workedPct >= 100 ? "✓ Goal reached" : `${Math.round(workedPct)}% done`}
+            </span>
+          </div>
+
+          <div className="relative mb-3">
+            <div className="h-4 bg-slate-800 rounded-full overflow-hidden relative">
+              <div className="absolute inset-y-0 left-0 bg-slate-700/60 rounded-full transition-all duration-1000"
+                style={{ width: `${sp}%` }} />
+              <div className="absolute inset-y-0 left-0 rounded-full transition-all duration-1000"
+                style={{
+                  width: `${workedPct}%`,
+                  background: workedPct >= 100
+                    ? "linear-gradient(90deg,#059669,#34d399)"
+                    : workedPct >= 75
+                      ? "linear-gradient(90deg,#2563eb,#60a5fa)"
+                      : "linear-gradient(90deg,#4f46e5,#818cf8)",
+                }} />
+            </div>
+            {sp > 2 && sp < 98 && (
+              <div className="absolute top-0 bottom-0 w-0.5 bg-white/50"
+                style={{ left: `${sp}%`, transform: "translateX(-50%)" }} />
+            )}
+          </div>
+
+          <div className="flex justify-between text-xs font-mono">
+            <span className="text-slate-600">{schedule.startTime}</span>
+            <span className="text-slate-400">
+              {isCheckedIn
+                ? `${fmtDur(worked)} worked · ${fmtDur(remaining)} remaining`
+                : `${fmtDur(worked)} worked today`}
+            </span>
+            <span className="text-slate-600">{schedule.endTime}</span>
+          </div>
+
+          <div className="flex gap-4 mt-3 text-xs text-slate-600">
+            <span className="flex items-center gap-1.5">
+              <span className="w-3 h-1.5 rounded-full bg-slate-700 inline-block" /> Day elapsed
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="w-3 h-1.5 rounded-full bg-blue-500 inline-block" /> Hours worked
+            </span>
+          </div>
+        </div>
+
+        {/* Tabs */}
+        <div className="flex gap-1 bg-slate-900 border border-slate-800 rounded-xl p-1 w-fit">
+          {["today", "history"].map(t => (
+            <button key={t} onClick={() => setTab(t)}
+              className={`px-5 py-2 rounded-lg text-sm font-medium transition-all ${tab === t ? "bg-blue-600 text-white shadow-sm" : "text-slate-400 hover:text-slate-200"
+                }`}>
+              {t === "today" ? "Today's Log" : "History"}
+            </button>
+          ))}
+        </div>
+
+        {/* TODAY TAB */}
+        {tab === "today" && (
+          <div className="grid md:grid-cols-2 gap-5">
+
+            {/* Time Tracking */}
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
+              <h3 className="font-semibold text-slate-200 flex items-center gap-2 text-sm">
+                <span className="w-6 h-6 bg-blue-500/20 rounded flex items-center justify-center text-xs">⏱</span>
+                Time Tracking
+              </h3>
+
+              <div className="grid grid-cols-2 gap-2.5">
+                {[
+                  { label: "Check In", value: todayEntry?.checkIn || "--:--" },
+                  { label: "Check Out", value: todayEntry?.checkOut || "--:--" },
+                  { label: "Break Start", value: todayEntry?.breakStart || "--:--" },
+                  { label: "Break End", value: todayEntry?.breakEnd || "--:--" },
+                ].map(item => (
+                  <div key={item.label} className="bg-slate-800/70 rounded-lg p-3">
+                    <div className="text-xs text-slate-500 mb-1">{item.label}</div>
+                    <div className="font-mono font-semibold text-slate-200 text-base">{item.value}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="space-y-2">
+                {!isCheckedIn ? (
+                  <button onClick={handleCheckIn}
+                    className="w-full py-3 rounded-xl font-semibold text-white bg-blue-600 hover:bg-blue-500 active:scale-95 transition-all flex items-center justify-center gap-2">
+                    ▶ Check In
+                  </button>
+                ) : (
+                  <>
+                    <button onClick={handleCheckOut}
+                      className="w-full py-3 rounded-xl font-semibold text-white bg-rose-600 hover:bg-rose-500 active:scale-95 transition-all flex items-center justify-center gap-2">
+                      ⏹ Check Out
+                    </button>
+                    {!isOnBreak ? (
+                      <button onClick={handleStartBreak}
+                        className="w-full py-2.5 rounded-xl font-medium text-amber-300 bg-amber-500/10 border border-amber-500/20 hover:bg-amber-500/20 active:scale-95 transition-all">
+                        ☕ Start Break
+                      </button>
+                    ) : (
+                      <button onClick={handleEndBreak}
+                        className="w-full py-2.5 rounded-xl font-medium text-emerald-300 bg-emerald-500/10 border border-emerald-500/20 hover:bg-emerald-500/20 active:scale-95 transition-all">
+                        ✓ End Break
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-2">Day Notes</label>
+                <textarea value={notes} onChange={e => handleNotesChange(e.target.value)}
+                  placeholder="General notes for today..."
+                  rows={3}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-blue-500 resize-none transition-colors" />
+              </div>
+            </div>
+
+            {/* What I Did Today */}
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="font-semibold text-slate-200 flex items-center gap-2 text-sm">
+                  <span className="w-6 h-6 bg-violet-500/20 rounded flex items-center justify-center text-xs">✍</span>
+                  What I Did Today
+                </h3>
+                <span className="text-xs text-slate-500">{tasks.length} tasks</span>
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex gap-2">
+                  <input type="text" value={newTask}
+                    onChange={e => setNewTask(e.target.value)}
+                    onKeyDown={e => e.key === "Enter" && addTask()}
+                    placeholder="Add a task or activity..."
+                    className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
+                  />
+                  <button onClick={addTask}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-500 active:scale-95 rounded-lg text-sm font-semibold text-white transition-all">
+                    + Add
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {Object.keys(CAT).map(cat => (
+                    <button key={cat} onClick={() => setNewCat(cat)}
+                      className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${newCat === cat
+                          ? CAT[cat].color + " ring-1 ring-current"
+                          : "bg-slate-800 text-slate-500 border-slate-700 hover:border-slate-600"
+                        }`}>
+                      {CAT[cat].label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-1.5 max-h-64 overflow-y-auto pr-1">
+                {tasks.length === 0 ? (
+                  <div className="text-center py-10 text-slate-600 text-sm">
+                    No tasks yet — log what you've been working on!
+                  </div>
+                ) : tasks.map(task => (
+                  <div key={task.id}
+                    className="flex items-start gap-3 bg-slate-800/50 rounded-lg px-3 py-2.5 group hover:bg-slate-800/80 transition-colors">
+                    <div className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${CAT[task.category]?.dot || "bg-slate-400"}`} />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm text-slate-200 leading-snug">{task.description}</div>
+                      <div className="flex items-center gap-2 mt-1">
+                        <span className={`text-xs px-2 py-0.5 rounded-full border ${CAT[task.category]?.color || ""}`}>
+                          {CAT[task.category]?.label || task.category}
+                        </span>
+                        <span className="text-xs text-slate-500 font-mono">{task.time}</span>
+                      </div>
+                    </div>
+                    <button onClick={() => removeTask(task.id)}
+                      className="text-slate-600 hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-all text-xs mt-1">
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              {tasks.length > 0 && (
+                <p className="text-xs text-slate-600 text-center pt-1 border-t border-slate-800">
+                  💾 Tasks are saved to history on checkout
+                </p>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* HISTORY TAB */}
+        {tab === "history" && (
+          <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+            <div className="grid grid-cols-6 gap-2 px-5 py-3 border-b border-slate-800 text-xs font-semibold text-slate-500 uppercase tracking-wide">
+              {["Date", "In", "Out", "Break", "Total", "Tasks / Notes"].map(h => <div key={h}>{h}</div>)}
+            </div>
+
+            {entries.length === 0 ? (
+              <div className="py-16 text-center text-slate-600">
+                <div className="text-4xl mb-3">📋</div>
+                <p>No entries yet. Check in to start tracking!</p>
+              </div>
+            ) : (
+              <div className="divide-y divide-slate-800/60">
+                {[...entries].sort((a, b) => b.date.localeCompare(a.date)).map((entry, i) => {
+                  const { plain, tasks: entryTasks } = parseNotesAndTasks(entry.notes || "");
+                  const isExp = expanded === i;
+                  const goalMet = goalHrs > 0 && entry.totalHours >= goalHrs;
+                  const isToday = entry.date === todayKey();
+
+                  return (
+                    <div key={entry.id}>
+                      <div
+                        onClick={() => setExpanded(isExp ? null : i)}
+                        className={`grid grid-cols-6 gap-2 px-5 py-3.5 text-sm cursor-pointer hover:bg-slate-800/30 transition-colors ${isToday ? "bg-blue-500/5" : ""}`}>
+                        <div className="font-medium text-slate-200 flex items-center gap-2 flex-wrap">
+                          {new Date(entry.date + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                          {isToday && <span className="text-xs bg-blue-500/20 text-blue-400 border border-blue-500/30 px-1.5 py-0.5 rounded-full">today</span>}
+                        </div>
+                        <div className="font-mono text-slate-300">{entry.checkIn || "--:--"}</div>
+                        <div className="font-mono text-slate-300">{entry.checkOut || "--:--"}</div>
+                        <div className="text-slate-400">{Math.round(entry.breakMins || 0)}m</div>
+                        <div className="flex items-center gap-1">
+                          <span className={`font-mono font-semibold ${goalMet ? "text-emerald-400" : "text-blue-400"}`}>
+                            {fmtDur(entry.totalHours || 0)}
+                          </span>
+                          {goalMet && <span className="text-emerald-500 text-xs">✓</span>}
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-500 text-xs">
+                            {entryTasks.length > 0
+                              ? `${entryTasks.length} task${entryTasks.length > 1 ? "s" : ""}`
+                              : plain ? "📝 note" : "—"}
+                          </span>
+                          <span className="text-slate-600 text-xs">{isExp ? "▲" : "▼"}</span>
+                        </div>
+                      </div>
+
+                      {isExp && (
+                        <div className="px-5 pb-5 pt-3 bg-slate-800/20 border-t border-slate-800/40 space-y-4">
+                          {plain && (
+                            <div>
+                              <p className="text-xs text-slate-500 uppercase tracking-wide font-semibold mb-1.5">Notes</p>
+                              <p className="text-sm text-slate-300 leading-relaxed bg-slate-800/50 rounded-lg px-3 py-2.5">{plain}</p>
+                            </div>
+                          )}
+                          {entryTasks.length > 0 && (
+                            <div>
+                              <p className="text-xs text-slate-500 uppercase tracking-wide font-semibold mb-2">Tasks completed</p>
+                              <div className="space-y-1.5">
+                                {entryTasks.map(task => (
+                                  <div key={task.id} className="flex items-start gap-3 bg-slate-800/60 rounded-lg px-3 py-2.5">
+                                    <div className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${CAT[task.category]?.dot || "bg-slate-400"}`} />
+                                    <div className="flex-1">
+                                      <div className="text-sm text-slate-200">{task.description}</div>
+                                      <div className="flex gap-2 mt-1">
+                                        <span className={`text-xs px-2 py-0.5 rounded-full border ${CAT[task.category]?.color || "bg-slate-700 text-slate-400 border-slate-600"}`}>
+                                          {CAT[task.category]?.label || task.category}
+                                        </span>
+                                        <span className="text-xs text-slate-500 font-mono">{task.time}</span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          {!plain && entryTasks.length === 0 && (
+                            <p className="text-xs text-slate-600 italic">No tasks or notes recorded for this day.</p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
       </div>
-
-      {/* Statistics Cards */}
-      <div className="grid md:grid-cols-3 gap-6 mb-8">
-        <div className="bg-white p-6 rounded-lg shadow-md border">
-          <h4 className="text-lg font-semibold text-gray-800 mb-2">Today</h4>
-          <div className="text-2xl font-bold text-purple-600">
-            {isCheckedIn ? formatDuration(getCurrentDuration()) : formatDuration(todayEntry?.total_hours || 0)}
-          </div>
-        </div>
-        
-        <div className="bg-white p-6 rounded-lg shadow-md border">
-          <h4 className="text-lg font-semibold text-gray-800 mb-2">This Week</h4>
-          <div className="text-2xl font-bold text-purple-600">
-            {formatDuration(getWeeklyTotal())}
-          </div>
-        </div>
-        
-        <div className="bg-white p-6 rounded-lg shadow-md border">
-          <h4 className="text-lg font-semibold text-gray-800 mb-2">Total Entries</h4>
-          <div className="text-2xl font-bold text-purple-600">
-            {entries.length}
-          </div>
-        </div>
-      </div>
-
-      {/* History */}
-      <div className="bg-white rounded-lg shadow-md p-6">
-        <h3 className="text-xl font-semibold text-gray-800 mb-4">Work History</h3>
-        
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead>
-              <tr className="border-b">
-                <th className="text-left py-2">Date</th>
-                <th className="text-left py-2">Check In</th>
-                <th className="text-left py-2">Check Out</th>
-                <th className="text-left py-2">Break Time</th>
-                <th className="text-left py-2">Total Hours</th>
-                <th className="text-left py-2">Notes</th>
-              </tr>
-            </thead>
-            <tbody>
-              {entries.map((entry) => (
-                <tr key={entry.id} className="border-b hover:bg-gray-50">
-                  <td className="py-3">{new Date(entry.date).toLocaleDateString()}</td>
-                  <td className="py-3">{formatTime(entry.check_in_time)}</td>
-                  <td className="py-3">{formatTime(entry.check_out_time)}</td>
-                  <td className="py-3">{Math.round(entry.break_duration)} min</td>
-                  <td className="py-3 font-medium">{formatDuration(entry.total_hours)}</td>
-                  <td className="py-3 text-sm text-gray-600 max-w-xs truncate">
-                    {entry.notes || '-'}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          
-          {entries.length === 0 && (
-            <div className="text-center py-8 text-gray-500">
-              No work entries yet. Check in to start tracking your hours!
-            </div>
-          )}
-        </div>
-      </div>
     </div>
   );
-};
-
-export default OfficeHours;
+}
