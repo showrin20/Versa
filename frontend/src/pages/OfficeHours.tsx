@@ -7,11 +7,11 @@ const TASKS_PREFIX = "wl_tasks_";
 const DEFAULT_SCHED = { startTime: "09:00", endTime: "17:00" };
 
 const CAT = {
-  meeting: { label: "Meeting", color: "bg-blue-500/20 text-blue-400 border-blue-500/30", dot: "bg-blue-400" },
-  coding: { label: "Coding", color: "bg-emerald-500/20 text-emerald-400 border-emerald-500/30", dot: "bg-emerald-400" },
-  review: { label: "Review", color: "bg-amber-500/20 text-amber-400 border-amber-500/30", dot: "bg-amber-400" },
-  docs: { label: "Docs", color: "bg-violet-500/20 text-violet-400 border-violet-500/30", dot: "bg-violet-400" },
-  other: { label: "Other", color: "bg-slate-500/20 text-slate-400 border-slate-500/30", dot: "bg-slate-400" },
+  meeting: { label: "Meeting", color: "bg-blue-500/20 text-blue-600 dark:text-blue-400 border-blue-500/30", dot: "bg-blue-500 dark:bg-blue-400" },
+  coding: { label: "Coding", color: "bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border-emerald-500/30", dot: "bg-emerald-500 dark:bg-emerald-400" },
+  review: { label: "Review", color: "bg-amber-500/20 text-amber-600 dark:text-amber-400 border-amber-500/30", dot: "bg-amber-500 dark:bg-amber-400" },
+  docs: { label: "Docs", color: "bg-violet-500/20 text-violet-600 dark:text-violet-400 border-violet-500/30", dot: "bg-violet-500 dark:bg-violet-400" },
+  other: { label: "Other", color: "bg-slate-500/20 text-slate-600 dark:text-slate-400 border-slate-500/30", dot: "bg-slate-500 dark:bg-slate-400" },
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -60,17 +60,14 @@ export default function OfficeHours() {
   const [notes, setNotes] = useState("");
   const notesTimer = useRef<NodeJS.Timeout | null>(null);
 
-  // Derive today's entry from entries array
   const todayEntry = entries.find((e: any) => e.date === todayKey()) || null;
   const isCheckedIn = !!(todayEntry?.checkIn && !todayEntry?.checkOut);
   const isOnBreak = !!(todayEntry?.breakStart && !todayEntry?.breakEnd);
 
-  // Sync notes field when todayEntry changes
   useEffect(() => {
     if (todayEntry) setNotes(todayEntry.notes || "");
   }, [todayEntry?.id]);
 
-  // Clock tick
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(t);
@@ -109,7 +106,6 @@ export default function OfficeHours() {
     const ci = t2h(todayEntry.checkIn);
     const co = t2h(checkOut);
     const totalHours = Math.max(0, co - ci - (todayEntry.breakMins || 0) / 60);
-    // bundle tasks into notes
     const currentTasks: any[] = ls.get(TASKS_PREFIX + todayKey(), []);
     const taskLine = currentTasks.length
       ? "\n\n--- Tasks ---\n" + currentTasks.map((t: any) => `[${t.category}] ${t.time} — ${t.description}`).join("\n")
@@ -193,9 +189,9 @@ export default function OfficeHours() {
   };
 
   const statusBadge = () => {
-    if (!isCheckedIn) return { label: "Not checked in", cls: "bg-slate-800 text-slate-400 border border-slate-700" };
-    if (isOnBreak) return { label: "☕ On break", cls: "bg-amber-500/20 text-amber-300 border border-amber-500/30" };
-    return { label: "🟢 Working", cls: "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30" };
+    if (!isCheckedIn) return { label: "Not checked in", cls: "bg-gray-100 dark:bg-slate-800 text-gray-500 dark:text-slate-400 border border-gray-300 dark:border-slate-700" };
+    if (isOnBreak) return { label: "☕ On break", cls: "bg-amber-500/20 text-amber-600 dark:text-amber-300 border border-amber-500/30" };
+    return { label: "🟢 Working", cls: "bg-emerald-500/20 text-emerald-600 dark:text-emerald-300 border border-emerald-500/30" };
   };
 
   const badge = statusBadge();
@@ -204,22 +200,22 @@ export default function OfficeHours() {
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div style={{ fontFamily: "'DM Sans','Segoe UI',sans-serif" }}
-      className="min-h-screen bg-slate-950 text-slate-100">
+      className="min-h-screen bg-gray-50 dark:bg-slate-950 text-gray-900 dark:text-slate-100">
 
       {/* ── BANNER ── */}
-      <div className="relative overflow-hidden bg-slate-900 border-b border-slate-800">
+      <div className="relative overflow-hidden bg-white dark:bg-slate-900 border-b border-gray-200 dark:border-slate-800">
         <div className="absolute inset-0 pointer-events-none"
-          style={{ background: "radial-gradient(ellipse 70% 120% at 60% -10%, rgba(30,64,175,0.35), transparent 65%)" }} />
+          style={{ background: "radial-gradient(ellipse 70% 120% at 60% -10%, rgba(30,64,175,0.15), transparent 65%)" }} />
         <div className="relative max-w-5xl mx-auto px-5 py-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <div>
             <div className="flex items-center gap-2 mb-1">
               <div className="w-7 h-7 rounded-lg bg-blue-600 flex items-center justify-center text-sm">⏱</div>
-              <span className="text-xs uppercase tracking-widest text-slate-500 font-semibold">WorkLog</span>
+              <span className="text-xs uppercase tracking-widest text-gray-500 dark:text-slate-500 font-semibold">WorkLog</span>
             </div>
-            <h1 className="text-2xl font-bold text-white">
-              {greeting()}, <span className="text-blue-400">let's get to work</span>
+            <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
+              {greeting()}, <span className="text-blue-500 dark:text-blue-400">let's get to work</span>
             </h1>
-            <p className="text-slate-500 text-sm mt-0.5">
+            <p className="text-gray-500 dark:text-slate-500 text-sm mt-0.5">
               {now.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
             </p>
           </div>
@@ -228,17 +224,17 @@ export default function OfficeHours() {
             {/* Office hours pill */}
             <button
               onClick={() => { setDraftSched(schedule); setShowSchedEd(true); }}
-              className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-blue-500/50 rounded-xl px-4 py-2.5 transition-all group"
+              className="flex items-center gap-2 bg-gray-100 hover:bg-gray-200 dark:bg-slate-800 dark:hover:bg-slate-700 border border-gray-300 dark:border-slate-700 hover:border-blue-500/50 rounded-xl px-4 py-2.5 transition-all group"
             >
-              <span className="text-slate-400 text-xs">🕐 Office hours</span>
-              <span className="font-mono font-semibold text-blue-400 text-sm">
+              <span className="text-gray-500 dark:text-slate-400 text-xs">🕐 Office hours</span>
+              <span className="font-mono font-semibold text-blue-500 dark:text-blue-400 text-sm">
                 {schedule.startTime} – {schedule.endTime}
               </span>
-              <span className="text-slate-600 group-hover:text-slate-300 text-xs ml-1 transition-colors">✎</span>
+              <span className="text-gray-400 dark:text-slate-600 group-hover:text-gray-600 dark:group-hover:text-slate-300 text-xs ml-1 transition-colors">✎</span>
             </button>
 
             <div className="text-right">
-              <div className="text-3xl font-mono font-bold text-white tabular-nums">
+              <div className="text-3xl font-mono font-bold text-gray-900 dark:text-white tabular-nums">
                 {now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })}
               </div>
               <span className={`inline-block mt-1 px-3 py-1 rounded-full text-xs font-medium ${badge.cls}`}>
@@ -251,29 +247,29 @@ export default function OfficeHours() {
 
       {/* ── SCHEDULE EDITOR MODAL ── */}
       {showSchedEd && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 px-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-full max-w-sm shadow-2xl">
-            <h3 className="font-semibold text-slate-100 text-lg mb-1">Set Office Hours</h3>
-            <p className="text-slate-500 text-sm mb-5">Your usual schedule — used for daily goal progress.</p>
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 px-4">
+          <div className="bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-700 rounded-2xl p-6 w-full max-w-sm shadow-2xl">
+            <h3 className="font-semibold text-gray-900 dark:text-slate-100 text-lg mb-1">Set Office Hours</h3>
+            <p className="text-gray-500 dark:text-slate-500 text-sm mb-5">Your usual schedule — used for daily goal progress.</p>
 
             <div className="grid grid-cols-2 gap-4 mb-4">
               {[["Start time", "startTime"], ["End time", "endTime"]].map(([label, key]) => (
                 <div key={key}>
-                  <label className="block text-xs text-slate-400 mb-1.5 font-medium">{label}</label>
+                  <label className="block text-xs text-gray-600 dark:text-slate-400 mb-1.5 font-medium">{label}</label>
                   <input type="time" value={(draftSched as any)[key]}
                     onChange={e => setDraftSched((d: any) => ({ ...d, [key]: e.target.value }))}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2.5 text-slate-100 font-mono text-sm focus:outline-none focus:border-blue-500 transition-colors"
+                    className="w-full bg-gray-100 dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-lg px-3 py-2.5 text-gray-900 dark:text-slate-100 font-mono text-sm focus:outline-none focus:border-blue-500 transition-colors"
                   />
                 </div>
               ))}
             </div>
 
-            <div className="bg-slate-800 rounded-lg px-4 py-3 mb-4 flex justify-between items-center">
-              <span className="text-sm text-slate-400">Total scheduled</span>
-              <span className="font-mono font-bold text-slate-200">{fmtDur(schedHrs(draftSched))}</span>
+            <div className="bg-gray-100 dark:bg-slate-800 rounded-lg px-4 py-3 mb-4 flex justify-between items-center">
+              <span className="text-sm text-gray-500 dark:text-slate-400">Total scheduled</span>
+              <span className="font-mono font-bold text-gray-800 dark:text-slate-200">{fmtDur(schedHrs(draftSched))}</span>
             </div>
 
-            <p className="text-xs text-slate-500 mb-2">Quick presets</p>
+            <p className="text-xs text-gray-500 dark:text-slate-500 mb-2">Quick presets</p>
             <div className="flex flex-wrap gap-2 mb-5">
               {[
                 { label: "9:00 – 5:00", s: "09:00", e: "17:00" },
@@ -286,7 +282,7 @@ export default function OfficeHours() {
                   onClick={() => setDraftSched({ startTime: p.s, endTime: p.e })}
                   className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${draftSched.startTime === p.s && draftSched.endTime === p.e
                       ? "bg-blue-600 border-blue-500 text-white"
-                      : "bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-600"
+                      : "bg-gray-100 dark:bg-slate-800 border-gray-300 dark:border-slate-700 text-gray-600 dark:text-slate-400 hover:border-gray-400 dark:hover:border-slate-600"
                     }`}>
                   {p.label}
                 </button>
@@ -295,7 +291,7 @@ export default function OfficeHours() {
 
             <div className="flex gap-3">
               <button onClick={() => setShowSchedEd(false)}
-                className="flex-1 py-2.5 rounded-xl border border-slate-700 text-slate-400 text-sm hover:border-slate-600 transition-colors">
+                className="flex-1 py-2.5 rounded-xl border border-gray-300 dark:border-slate-700 text-gray-600 dark:text-slate-400 text-sm hover:border-gray-400 dark:hover:border-slate-600 transition-colors">
                 Cancel
               </button>
               <button onClick={saveSchedule}
@@ -313,41 +309,41 @@ export default function OfficeHours() {
         {/* Stats */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           {[
-            { label: "Today", value: fmtDur(worked), icon: "📅", color: "text-blue-400" },
-            { label: "This Week", value: fmtDur(weekTotal()), icon: "📊", color: "text-violet-400" },
-            { label: "Break", value: `${Math.round(todayEntry?.breakMins || 0)}m`, icon: "☕", color: "text-amber-400" },
-            { label: "Remaining", value: isCheckedIn ? fmtDur(remaining) : "—", icon: "⏳", color: "text-rose-400" },
+            { label: "Today", value: fmtDur(worked), icon: "📅", color: "text-blue-500 dark:text-blue-400" },
+            { label: "This Week", value: fmtDur(weekTotal()), icon: "📊", color: "text-violet-500 dark:text-violet-400" },
+            { label: "Break", value: `${Math.round(todayEntry?.breakMins || 0)}m`, icon: "☕", color: "text-amber-500 dark:text-amber-400" },
+            { label: "Remaining", value: isCheckedIn ? fmtDur(remaining) : "—", icon: "⏳", color: "text-rose-500 dark:text-rose-400" },
           ].map(s => (
-            <div key={s.label} className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex items-center gap-3">
+            <div key={s.label} className="bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-800 rounded-xl p-4 flex items-center gap-3">
               <span className="text-xl">{s.icon}</span>
               <div>
                 <div className={`text-lg font-bold font-mono ${s.color}`}>{s.value}</div>
-                <div className="text-xs text-slate-500">{s.label}</div>
+                <div className="text-xs text-gray-500 dark:text-slate-500">{s.label}</div>
               </div>
             </div>
           ))}
         </div>
 
         {/* Schedule Progress */}
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+        <div className="bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-800 rounded-xl p-5">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h3 className="font-semibold text-slate-200 text-sm">Daily Schedule Progress</h3>
-              <p className="text-xs text-slate-500 mt-0.5">
+              <h3 className="font-semibold text-gray-800 dark:text-slate-200 text-sm">Daily Schedule Progress</h3>
+              <p className="text-xs text-gray-500 dark:text-slate-500 mt-0.5">
                 {schedule.startTime} – {schedule.endTime} · Goal: {fmtDur(goalHrs)}
               </p>
             </div>
             <span className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${workedPct >= 100
-                ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/30"
-                : "bg-blue-500/20 text-blue-400 border-blue-500/30"
+                ? "bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border-emerald-500/30"
+                : "bg-blue-500/20 text-blue-600 dark:text-blue-400 border-blue-500/30"
               }`}>
               {workedPct >= 100 ? "✓ Goal reached" : `${Math.round(workedPct)}% done`}
             </span>
           </div>
 
           <div className="relative mb-3">
-            <div className="h-4 bg-slate-800 rounded-full overflow-hidden relative">
-              <div className="absolute inset-y-0 left-0 bg-slate-700/60 rounded-full transition-all duration-1000"
+            <div className="h-4 bg-gray-200 dark:bg-slate-800 rounded-full overflow-hidden relative">
+              <div className="absolute inset-y-0 left-0 bg-gray-300/80 dark:bg-slate-700/60 rounded-full transition-all duration-1000"
                 style={{ width: `${sp}%` }} />
               <div className="absolute inset-y-0 left-0 rounded-full transition-all duration-1000"
                 style={{
@@ -360,24 +356,24 @@ export default function OfficeHours() {
                 }} />
             </div>
             {sp > 2 && sp < 98 && (
-              <div className="absolute top-0 bottom-0 w-0.5 bg-white/50"
+              <div className="absolute top-0 bottom-0 w-0.5 bg-gray-500/50 dark:bg-white/50"
                 style={{ left: `${sp}%`, transform: "translateX(-50%)" }} />
             )}
           </div>
 
           <div className="flex justify-between text-xs font-mono">
-            <span className="text-slate-600">{schedule.startTime}</span>
-            <span className="text-slate-400">
+            <span className="text-gray-400 dark:text-slate-600">{schedule.startTime}</span>
+            <span className="text-gray-600 dark:text-slate-400">
               {isCheckedIn
                 ? `${fmtDur(worked)} worked · ${fmtDur(remaining)} remaining`
                 : `${fmtDur(worked)} worked today`}
             </span>
-            <span className="text-slate-600">{schedule.endTime}</span>
+            <span className="text-gray-400 dark:text-slate-600">{schedule.endTime}</span>
           </div>
 
-          <div className="flex gap-4 mt-3 text-xs text-slate-600">
+          <div className="flex gap-4 mt-3 text-xs text-gray-400 dark:text-slate-600">
             <span className="flex items-center gap-1.5">
-              <span className="w-3 h-1.5 rounded-full bg-slate-700 inline-block" /> Day elapsed
+              <span className="w-3 h-1.5 rounded-full bg-gray-300 dark:bg-slate-700 inline-block" /> Day elapsed
             </span>
             <span className="flex items-center gap-1.5">
               <span className="w-3 h-1.5 rounded-full bg-blue-500 inline-block" /> Hours worked
@@ -386,10 +382,10 @@ export default function OfficeHours() {
         </div>
 
         {/* Tabs */}
-        <div className="flex gap-1 bg-slate-900 border border-slate-800 rounded-xl p-1 w-fit">
+        <div className="flex gap-1 bg-gray-100 dark:bg-slate-900 border border-gray-200 dark:border-slate-800 rounded-xl p-1 w-fit">
           {["today", "history"].map(t => (
             <button key={t} onClick={() => setTab(t)}
-              className={`px-5 py-2 rounded-lg text-sm font-medium transition-all ${tab === t ? "bg-blue-600 text-white shadow-sm" : "text-slate-400 hover:text-slate-200"
+              className={`px-5 py-2 rounded-lg text-sm font-medium transition-all ${tab === t ? "bg-blue-600 text-white shadow-sm" : "text-gray-600 dark:text-slate-400 hover:text-gray-900 dark:hover:text-slate-200"
                 }`}>
               {t === "today" ? "Today's Log" : "History"}
             </button>
@@ -401,8 +397,8 @@ export default function OfficeHours() {
           <div className="grid md:grid-cols-2 gap-5">
 
             {/* Time Tracking */}
-            <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
-              <h3 className="font-semibold text-slate-200 flex items-center gap-2 text-sm">
+            <div className="bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-800 rounded-xl p-5 space-y-4">
+              <h3 className="font-semibold text-gray-800 dark:text-slate-200 flex items-center gap-2 text-sm">
                 <span className="w-6 h-6 bg-blue-500/20 rounded flex items-center justify-center text-xs">⏱</span>
                 Time Tracking
               </h3>
@@ -414,9 +410,9 @@ export default function OfficeHours() {
                   { label: "Break Start", value: todayEntry?.breakStart || "--:--" },
                   { label: "Break End", value: todayEntry?.breakEnd || "--:--" },
                 ].map(item => (
-                  <div key={item.label} className="bg-slate-800/70 rounded-lg p-3">
-                    <div className="text-xs text-slate-500 mb-1">{item.label}</div>
-                    <div className="font-mono font-semibold text-slate-200 text-base">{item.value}</div>
+                  <div key={item.label} className="bg-gray-100 dark:bg-slate-800/70 rounded-lg p-3">
+                    <div className="text-xs text-gray-500 dark:text-slate-500 mb-1">{item.label}</div>
+                    <div className="font-mono font-semibold text-gray-800 dark:text-slate-200 text-base">{item.value}</div>
                   </div>
                 ))}
               </div>
@@ -435,12 +431,12 @@ export default function OfficeHours() {
                     </button>
                     {!isOnBreak ? (
                       <button onClick={handleStartBreak}
-                        className="w-full py-2.5 rounded-xl font-medium text-amber-300 bg-amber-500/10 border border-amber-500/20 hover:bg-amber-500/20 active:scale-95 transition-all">
+                        className="w-full py-2.5 rounded-xl font-medium text-amber-600 dark:text-amber-300 bg-amber-500/10 border border-amber-500/20 hover:bg-amber-500/20 active:scale-95 transition-all">
                         ☕ Start Break
                       </button>
                     ) : (
                       <button onClick={handleEndBreak}
-                        className="w-full py-2.5 rounded-xl font-medium text-emerald-300 bg-emerald-500/10 border border-emerald-500/20 hover:bg-emerald-500/20 active:scale-95 transition-all">
+                        className="w-full py-2.5 rounded-xl font-medium text-emerald-600 dark:text-emerald-300 bg-emerald-500/10 border border-emerald-500/20 hover:bg-emerald-500/20 active:scale-95 transition-all">
                         ✓ End Break
                       </button>
                     )}
@@ -449,22 +445,22 @@ export default function OfficeHours() {
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-slate-400 mb-2">Day Notes</label>
+                <label className="block text-xs font-medium text-gray-600 dark:text-slate-400 mb-2">Day Notes</label>
                 <textarea value={notes} onChange={e => handleNotesChange(e.target.value)}
                   placeholder="General notes for today..."
                   rows={3}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-blue-500 resize-none transition-colors" />
+                  className="w-full bg-gray-100 dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm text-gray-800 dark:text-slate-200 placeholder-gray-400 dark:placeholder-slate-500 focus:outline-none focus:border-blue-500 resize-none transition-colors" />
               </div>
             </div>
 
             {/* What I Did Today */}
-            <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
+            <div className="bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-800 rounded-xl p-5 space-y-4">
               <div className="flex items-center justify-between">
-                <h3 className="font-semibold text-slate-200 flex items-center gap-2 text-sm">
+                <h3 className="font-semibold text-gray-800 dark:text-slate-200 flex items-center gap-2 text-sm">
                   <span className="w-6 h-6 bg-violet-500/20 rounded flex items-center justify-center text-xs">✍</span>
                   What I Did Today
                 </h3>
-                <span className="text-xs text-slate-500">{tasks.length} tasks</span>
+                <span className="text-xs text-gray-500 dark:text-slate-500">{tasks.length} tasks</span>
               </div>
 
               <div className="space-y-2">
@@ -473,7 +469,7 @@ export default function OfficeHours() {
                     onChange={e => setNewTask(e.target.value)}
                     onKeyDown={e => e.key === "Enter" && addTask()}
                     placeholder="Add a task or activity..."
-                    className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
+                    className="flex-1 bg-gray-100 dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-lg px-3 py-2 text-sm text-gray-800 dark:text-slate-200 placeholder-gray-400 dark:placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
                   />
                   <button onClick={addTask}
                     className="px-4 py-2 bg-blue-600 hover:bg-blue-500 active:scale-95 rounded-lg text-sm font-semibold text-white transition-all">
@@ -485,7 +481,7 @@ export default function OfficeHours() {
                     <button key={cat} onClick={() => setNewCat(cat as keyof typeof CAT)}
                       className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${newCat === cat
                           ? CAT[cat as keyof typeof CAT].color + " ring-1 ring-current"
-                          : "bg-slate-800 text-slate-500 border-slate-700 hover:border-slate-600"
+                          : "bg-gray-100 dark:bg-slate-800 text-gray-500 dark:text-slate-500 border-gray-300 dark:border-slate-700 hover:border-gray-400 dark:hover:border-slate-600"
                         }`}>
                       {CAT[cat as keyof typeof CAT].label}
                     </button>
@@ -495,24 +491,24 @@ export default function OfficeHours() {
 
               <div className="space-y-1.5 max-h-64 overflow-y-auto pr-1">
                 {tasks.length === 0 ? (
-                  <div className="text-center py-10 text-slate-600 text-sm">
+                  <div className="text-center py-10 text-gray-400 dark:text-slate-600 text-sm">
                     No tasks yet — log what you've been working on!
                   </div>
                 ) : tasks.map((task: any) => (
                   <div key={task.id}
-                    className="flex items-start gap-3 bg-slate-800/50 rounded-lg px-3 py-2.5 group hover:bg-slate-800/80 transition-colors">
-                    <div className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${CAT[task.category as keyof typeof CAT]?.dot || "bg-slate-400"}`} />
+                    className="flex items-start gap-3 bg-gray-50 dark:bg-slate-800/50 rounded-lg px-3 py-2.5 group hover:bg-gray-100 dark:hover:bg-slate-800/80 transition-colors">
+                    <div className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${CAT[task.category as keyof typeof CAT]?.dot || "bg-gray-400"}`} />
                     <div className="flex-1 min-w-0">
-                      <div className="text-sm text-slate-200 leading-snug">{task.description}</div>
+                      <div className="text-sm text-gray-800 dark:text-slate-200 leading-snug">{task.description}</div>
                       <div className="flex items-center gap-2 mt-1">
                         <span className={`text-xs px-2 py-0.5 rounded-full border ${CAT[task.category as keyof typeof CAT]?.color || ""}`}>
                           {CAT[task.category as keyof typeof CAT]?.label || task.category}
                         </span>
-                        <span className="text-xs text-slate-500 font-mono">{task.time}</span>
+                        <span className="text-xs text-gray-500 dark:text-slate-500 font-mono">{task.time}</span>
                       </div>
                     </div>
                     <button onClick={() => removeTask(task.id)}
-                      className="text-slate-600 hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-all text-xs mt-1">
+                      className="text-gray-400 dark:text-slate-600 hover:text-rose-500 opacity-0 group-hover:opacity-100 transition-all text-xs mt-1">
                       ✕
                     </button>
                   </div>
@@ -520,7 +516,7 @@ export default function OfficeHours() {
               </div>
 
               {tasks.length > 0 && (
-                <p className="text-xs text-slate-600 text-center pt-1 border-t border-slate-800">
+                <p className="text-xs text-gray-400 dark:text-slate-600 text-center pt-1 border-t border-gray-200 dark:border-slate-800">
                   💾 Tasks are saved to history on checkout
                 </p>
               )}
@@ -530,18 +526,18 @@ export default function OfficeHours() {
 
         {/* HISTORY TAB */}
         {tab === "history" && (
-          <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
-            <div className="grid grid-cols-6 gap-2 px-5 py-3 border-b border-slate-800 text-xs font-semibold text-slate-500 uppercase tracking-wide">
+          <div className="bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-800 rounded-xl overflow-hidden">
+            <div className="grid grid-cols-6 gap-2 px-5 py-3 border-b border-gray-200 dark:border-slate-800 text-xs font-semibold text-gray-500 dark:text-slate-500 uppercase tracking-wide">
               {["Date", "In", "Out", "Break", "Total", "Tasks / Notes"].map(h => <div key={h}>{h}</div>)}
             </div>
 
             {entries.length === 0 ? (
-              <div className="py-16 text-center text-slate-600">
+              <div className="py-16 text-center text-gray-400 dark:text-slate-600">
                 <div className="text-4xl mb-3">📋</div>
                 <p>No entries yet. Check in to start tracking!</p>
               </div>
             ) : (
-              <div className="divide-y divide-slate-800/60">
+              <div className="divide-y divide-gray-200 dark:divide-slate-800/60">
                 {[...entries].sort((a, b) => b.date.localeCompare(a.date)).map((entry, i) => {
                   const { plain, tasks: entryTasks } = parseNotesAndTasks(entry.notes || "");
                   const isExp = expanded === i;
@@ -552,52 +548,52 @@ export default function OfficeHours() {
                     <div key={entry.id}>
                       <div
                         onClick={() => setExpanded(isExp ? null : i)}
-                        className={`grid grid-cols-6 gap-2 px-5 py-3.5 text-sm cursor-pointer hover:bg-slate-800/30 transition-colors ${isToday ? "bg-blue-500/5" : ""}`}>
-                        <div className="font-medium text-slate-200 flex items-center gap-2 flex-wrap">
+                        className={`grid grid-cols-6 gap-2 px-5 py-3.5 text-sm cursor-pointer hover:bg-gray-50 dark:hover:bg-slate-800/30 transition-colors ${isToday ? "bg-blue-500/5" : ""}`}>
+                        <div className="font-medium text-gray-800 dark:text-slate-200 flex items-center gap-2 flex-wrap">
                           {new Date(entry.date + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-                          {isToday && <span className="text-xs bg-blue-500/20 text-blue-400 border border-blue-500/30 px-1.5 py-0.5 rounded-full">today</span>}
+                          {isToday && <span className="text-xs bg-blue-500/20 text-blue-600 dark:text-blue-400 border border-blue-500/30 px-1.5 py-0.5 rounded-full">today</span>}
                         </div>
-                        <div className="font-mono text-slate-300">{entry.checkIn || "--:--"}</div>
-                        <div className="font-mono text-slate-300">{entry.checkOut || "--:--"}</div>
-                        <div className="text-slate-400">{Math.round(entry.breakMins || 0)}m</div>
+                        <div className="font-mono text-gray-700 dark:text-slate-300">{entry.checkIn || "--:--"}</div>
+                        <div className="font-mono text-gray-700 dark:text-slate-300">{entry.checkOut || "--:--"}</div>
+                        <div className="text-gray-600 dark:text-slate-400">{Math.round(entry.breakMins || 0)}m</div>
                         <div className="flex items-center gap-1">
-                          <span className={`font-mono font-semibold ${goalMet ? "text-emerald-400" : "text-blue-400"}`}>
+                          <span className={`font-mono font-semibold ${goalMet ? "text-emerald-600 dark:text-emerald-400" : "text-blue-600 dark:text-blue-400"}`}>
                             {fmtDur(entry.totalHours || 0)}
                           </span>
                           {goalMet && <span className="text-emerald-500 text-xs">✓</span>}
                         </div>
                         <div className="flex items-center justify-between">
-                          <span className="text-slate-500 text-xs">
+                          <span className="text-gray-500 dark:text-slate-500 text-xs">
                             {entryTasks.length > 0
                               ? `${entryTasks.length} task${entryTasks.length > 1 ? "s" : ""}`
                               : plain ? "📝 note" : "—"}
                           </span>
-                          <span className="text-slate-600 text-xs">{isExp ? "▲" : "▼"}</span>
+                          <span className="text-gray-400 dark:text-slate-600 text-xs">{isExp ? "▲" : "▼"}</span>
                         </div>
                       </div>
 
                       {isExp && (
-                        <div className="px-5 pb-5 pt-3 bg-slate-800/20 border-t border-slate-800/40 space-y-4">
+                        <div className="px-5 pb-5 pt-3 bg-gray-50 dark:bg-slate-800/20 border-t border-gray-200 dark:border-slate-800/40 space-y-4">
                           {plain && (
                             <div>
-                              <p className="text-xs text-slate-500 uppercase tracking-wide font-semibold mb-1.5">Notes</p>
-                              <p className="text-sm text-slate-300 leading-relaxed bg-slate-800/50 rounded-lg px-3 py-2.5">{plain}</p>
+                              <p className="text-xs text-gray-500 dark:text-slate-500 uppercase tracking-wide font-semibold mb-1.5">Notes</p>
+                              <p className="text-sm text-gray-700 dark:text-slate-300 leading-relaxed bg-gray-100 dark:bg-slate-800/50 rounded-lg px-3 py-2.5">{plain}</p>
                             </div>
                           )}
                           {entryTasks.length > 0 && (
                             <div>
-                              <p className="text-xs text-slate-500 uppercase tracking-wide font-semibold mb-2">Tasks completed</p>
+                              <p className="text-xs text-gray-500 dark:text-slate-500 uppercase tracking-wide font-semibold mb-2">Tasks completed</p>
                               <div className="space-y-1.5">
                                 {entryTasks.map((task: any) => (
-                                  <div key={task.id} className="flex items-start gap-3 bg-slate-800/60 rounded-lg px-3 py-2.5">
-                                    <div className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${CAT[task.category as keyof typeof CAT]?.dot || "bg-slate-400"}`} />
+                                  <div key={task.id} className="flex items-start gap-3 bg-white dark:bg-slate-800/60 rounded-lg px-3 py-2.5 border border-gray-100 dark:border-transparent">
+                                    <div className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${CAT[task.category as keyof typeof CAT]?.dot || "bg-gray-400"}`} />
                                     <div className="flex-1">
-                                      <div className="text-sm text-slate-200">{task.description}</div>
+                                      <div className="text-sm text-gray-800 dark:text-slate-200">{task.description}</div>
                                       <div className="flex gap-2 mt-1">
-                                        <span className={`text-xs px-2 py-0.5 rounded-full border ${CAT[task.category as keyof typeof CAT]?.color || "bg-slate-700 text-slate-400 border-slate-600"}`}>
+                                        <span className={`text-xs px-2 py-0.5 rounded-full border ${CAT[task.category as keyof typeof CAT]?.color || "bg-gray-100 text-gray-500 border-gray-300 dark:bg-slate-700 dark:text-slate-400 dark:border-slate-600"}`}>
                                           {CAT[task.category as keyof typeof CAT]?.label || task.category}
                                         </span>
-                                        <span className="text-xs text-slate-500 font-mono">{task.time}</span>
+                                        <span className="text-xs text-gray-500 dark:text-slate-500 font-mono">{task.time}</span>
                                       </div>
                                     </div>
                                   </div>
@@ -606,7 +602,7 @@ export default function OfficeHours() {
                             </div>
                           )}
                           {!plain && entryTasks.length === 0 && (
-                            <p className="text-xs text-slate-600 italic">No tasks or notes recorded for this day.</p>
+                            <p className="text-xs text-gray-400 dark:text-slate-600 italic">No tasks or notes recorded for this day.</p>
                           )}
                         </div>
                       )}

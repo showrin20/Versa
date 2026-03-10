@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { pdfBooksAPI, readingSessionsAPI } from '../services/api';
 import type { PDFBook, ReadingSession, ReadingSessionCreate } from '../types';
+import { useTheme } from '../context/ThemeContext';
 
 declare global {
   interface Window {
@@ -28,7 +29,7 @@ interface NarratorPreset {
   color: string;
 }
 
-const API_BASE_URL = 'http://localhost:8000/api/v1';
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1';
 
 const NARRATORS: NarratorPreset[] = [
   {
@@ -112,6 +113,7 @@ const extractChunksFromPageText = (pageText: string, pageNumber: number): Chunk[
 };
 
 const PDFReader: React.FC = () => {
+  const { theme } = useTheme();
   const [books, setBooks] = useState<PDFBook[]>([]);
   const [sessions, setSessions] = useState<ReadingSession[]>([]);
   const [activeBook, setActiveBook] = useState<PDFBook | null>(null);
@@ -448,7 +450,8 @@ const PDFReader: React.FC = () => {
     if (!audioDownloadUrl || !activeBook) return;
     const a = document.createElement('a');
     // If it's a relative URL, prepend the backend base
-    const fullUrl = audioDownloadUrl.startsWith('http') ? audioDownloadUrl : `http://localhost:8000${audioDownloadUrl}`;
+    const backendBase = API_BASE_URL.replace('/api/v1', '');
+    const fullUrl = audioDownloadUrl.startsWith('http') ? audioDownloadUrl : `${backendBase}${audioDownloadUrl}`;
     a.href = fullUrl; a.download = `${activeBook.name}.mp3`; a.click();
   };
 
@@ -521,9 +524,12 @@ const PDFReader: React.FC = () => {
 
   const renderCurrentContent = () => {
     if (chunks.length === 0) return null;
+    const readingColor = theme === 'light' ? '#1E293B' : '#E2E8F0';
+    const inactiveOpacity = theme === 'light' ? 0.45 : 0.42;
+
     if (mode === 'chunk') {
       return (
-        <div style={{ fontSize: `${fontSize}px`, lineHeight: 1.95, color: '#E2E8F0', fontFamily: "'Georgia', 'Times New Roman', serif" }}>
+        <div style={{ fontSize: `${fontSize}px`, lineHeight: 1.95, color: readingColor, fontFamily: "'Georgia', 'Times New Roman', serif" }}>
           {Array.from({ length: chunksPerRead }, (_, i) => chunks[currentChunk + i])
             .filter(Boolean)
             .map((chunk, index) => (
@@ -536,14 +542,14 @@ const PDFReader: React.FC = () => {
     }
     const sentences = chunks[currentChunk]?.text.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [chunks[currentChunk]?.text || ''];
     return (
-      <div style={{ fontSize: `${fontSize}px`, lineHeight: 1.95, color: '#E2E8F0', fontFamily: "'Georgia', 'Times New Roman', serif" }}>
+      <div style={{ fontSize: `${fontSize}px`, lineHeight: 1.95, color: readingColor, fontFamily: "'Georgia', 'Times New Roman', serif" }}>
         {sentences.map((sentence, idx) => {
           const active = idx >= currentSentence && idx < currentSentence + sentencesPerRead;
           return (
             <span key={`${idx}-${sentence.slice(0, 16)}`}
               style={{
                 background: active ? 'rgba(99,102,241,0.22)' : 'transparent',
-                opacity: active ? 1 : 0.42,
+                opacity: active ? 1 : inactiveOpacity,
                 borderRadius: '6px',
                 padding: active ? '2px 5px' : '0',
                 marginRight: '3px',
@@ -603,6 +609,73 @@ const PDFReader: React.FC = () => {
             linear-gradient(180deg, #0B1020 0%, #0A0F1A 100%);
           padding: 1.5rem 1rem;
           font-family: Inter, system-ui, sans-serif;
+        }
+
+        /* ── Light mode overrides ── */
+        .pdf-root.light-mode {
+          --text-main: #0F172A;
+          --text-muted: #334155;
+          --text-muted-2: #64748B;
+          --card-bg: rgba(255, 255, 255, 0.95);
+          --border: rgba(0,0,0,0.1);
+          --input-bg: rgba(0,0,0,0.04);
+          --input-border: rgba(0,0,0,0.15);
+          --btn-alt-bg: rgba(0,0,0,0.05);
+          --accent-transparent: rgba(99,102,241,0.12);
+          --modal-overlay: rgba(0,0,0,0.45);
+          --modal-bg: #FFFFFF;
+          --book-text: #1E293B;
+          background:
+            radial-gradient(circle at top, rgba(99,102,241,0.07), transparent 30%),
+            linear-gradient(180deg, #EEF2FF 0%, #F1F5FF 100%);
+        }
+        .pdf-root.light-mode .secondary-btn {
+          background: rgba(0,0,0,0.05);
+          border-color: rgba(0,0,0,0.12);
+          color: var(--text-muted);
+        }
+        .pdf-root.light-mode .secondary-btn:hover {
+          background: rgba(0,0,0,0.09);
+          border-color: rgba(0,0,0,0.2);
+          color: var(--text-main);
+        }
+        .pdf-root.light-mode .icon-btn {
+          background: rgba(0,0,0,0.05);
+          border-color: rgba(0,0,0,0.1);
+          color: var(--text-muted);
+        }
+        .pdf-root.light-mode .icon-btn:hover {
+          background: rgba(0,0,0,0.09);
+          color: var(--text-main);
+        }
+        .pdf-root.light-mode .book-nav-btn {
+          background: rgba(0,0,0,0.05);
+          border-color: rgba(0,0,0,0.1);
+          color: var(--text-muted);
+        }
+        .pdf-root.light-mode .book-nav-btn:hover:not(:disabled) {
+          background: rgba(0,0,0,0.09);
+          color: var(--text-main);
+        }
+        .pdf-root.light-mode .narrator-card {
+          background: rgba(0,0,0,0.03);
+          border-color: rgba(0,0,0,0.1);
+        }
+        .pdf-root.light-mode .narrator-card:hover {
+          border-color: rgba(0,0,0,0.18);
+        }
+        .pdf-root.light-mode .toggle-row {
+          background: rgba(0,0,0,0.04);
+          border-color: rgba(0,0,0,0.1);
+        }
+        .pdf-root.light-mode .toggle-row button { color: var(--text-muted); }
+        .pdf-root.light-mode .progress-bar { background: rgba(0,0,0,0.08); }
+        .pdf-root.light-mode .loading-spinner {
+          border-color: rgba(0,0,0,0.1);
+          border-top-color: var(--accent);
+        }
+        .pdf-root.light-mode .reading-body::-webkit-scrollbar-thumb {
+          background: rgba(99,102,241,0.35);
         }
 
         .glass-card {
@@ -939,7 +1012,7 @@ const PDFReader: React.FC = () => {
         }
       `}</style>
 
-      <div className="pdf-root">
+      <div className={`pdf-root${theme === 'light' ? ' light-mode' : ''}`}>
 
         {/* ─── Header ─── */}
         <div style={{ textAlign: 'center', marginBottom: '1.6rem' }}>
@@ -947,8 +1020,7 @@ const PDFReader: React.FC = () => {
             IMMERSIVE READER
           </div>
           <h1 style={{ color: 'var(--text-main)', fontSize: 'clamp(1.6rem, 4vw, 2.4rem)', margin: 0, fontWeight: 900, letterSpacing: '-0.02em' }}>
-            📚 Human-like PDF Audiobook Reader
-          </h1>
+            Focus Reader          </h1>
         </div>
 
         {/* ─── Library view ─── */}
@@ -972,7 +1044,13 @@ const PDFReader: React.FC = () => {
                   </div>
                   <div style={{ marginBottom: '1.1rem' }}>
                     <label style={{ color: 'var(--text-muted)', display: 'block', marginBottom: '0.4rem', fontSize: '0.85rem' }}>PDF file</label>
-                    <input type="file" accept=".pdf" onChange={(e) => setSelectedFile(e.target.files?.[0] || null)} required style={{ color: 'var(--text-muted)' }} />
+                    <input type="file" accept=".pdf" onChange={(e) => {
+                      const file = e.target.files?.[0] || null;
+                      setSelectedFile(file);
+                      if (file && !bookName.trim()) {
+                        setBookName(file.name.replace(/\.pdf$/i, ''));
+                      }
+                    }} required style={{ color: 'var(--text-muted)' }} />
                   </div>
                   <div style={{ display: 'flex', gap: '0.7rem' }}>
                     <button className="primary-btn" onClick={handleFileUpload as any} style={{ flex: 1, padding: '0.78rem 1rem' }}>Add book</button>

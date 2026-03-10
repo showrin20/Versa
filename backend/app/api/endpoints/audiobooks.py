@@ -1,5 +1,5 @@
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from typing import Dict, Any, Optional
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -81,14 +81,20 @@ def download_audiobook(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found")
     if job["state"] != "completed" or not job.get("audio_path"):
         raise HTTPException(status_code=400, detail="Audiobook not ready for download")
-    
-    audio_path = Path(job["audio_path"])
-    if not audio_path.exists():
+
+    audio_path = job["audio_path"]
+
+    # If stored in Supabase Storage, redirect to public URL
+    if audio_path.startswith("http"):
+        return RedirectResponse(url=audio_path)
+
+    audio_file = Path(audio_path)
+    if not audio_file.exists():
         raise HTTPException(status_code=404, detail="Audiobook file not found on disk")
-    
-    filename = audio_path.name
+
+    filename = audio_file.name
     return FileResponse(
-        path=str(audio_path),
+        path=str(audio_file),
         media_type="audio/mpeg",
         filename=filename,
         headers={"Content-Disposition": f'attachment; filename="{filename}"'}
@@ -101,14 +107,18 @@ def download_book_audiobook(book_id: int, db: Session = Depends(get_db)):
     book = crud.get_pdf_book(db, book_id=book_id)
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
-    
+
     if not book.audiobook_path:
         raise HTTPException(status_code=404, detail="No audiobook generated for this book yet")
-    
+
+    # If stored in Supabase Storage, redirect to public URL
+    if book.audiobook_path.startswith("http"):
+        return RedirectResponse(url=book.audiobook_path)
+
     audio_path = Path(book.audiobook_path)
     if not audio_path.exists():
         raise HTTPException(status_code=404, detail="Audiobook file not found on disk")
-    
+
     filename = audio_path.name
     return FileResponse(
         path=str(audio_path),
@@ -299,24 +309,43 @@ async def _run_generation(job_id: str, book_id: int, voice: str, style: str, fmt
             except Exception:
                 pass
 
+        # Try to upload the finished audiobook to Supabase Storage
+        final_audio_path = str(out_file)
+        try:
+            from app.core.storage import get_storage
+            storage = get_storage()
+            if storage:
+                print(f"[Audiobook Job {job_id}] Uploading audiobook to Supabase Storage")
+                with open(out_file, "rb") as f:
+                    audio_bytes = f.read()
+                supabase_url = storage.upload_audiobook_bytes(audio_bytes, out_file.name)
+                final_audio_path = supabase_url
+                print(f"[Audiobook Job {job_id}] Uploaded to Supabase: {supabase_url}")
+                # Clean up local file after successful upload
+                try:
+                    out_file.unlink()
+                except Exception:
+                    pass
+        except Exception as upload_err:
+            print(f"[Audiobook Job {job_id}] Supabase upload failed, keeping local file: {upload_err}")
+
         JOBS[job_id]["state"] = "completed"
         JOBS[job_id]["progress"] = 100
-        JOBS[job_id]["audio_path"] = str(out_file)
-        
+        JOBS[job_id]["audio_path"] = final_audio_path
+
         # Update the book record in the database with the audiobook path
-        if db:
+        try:
+            from app.core.database import SessionLocal
+            from app.schemas.schemas import PDFBookUpdate
+            db_session = SessionLocal()
             try:
-                from app.core.database import SessionLocal
-                # Create a new session since we're in an async task
-                db_session = SessionLocal()
-                try:
-                    crud.update_pdf_book(db_session, book_id=book_id, book_update={"audiobook_path": str(out_file)})
-                    db_session.commit()
-                    print(f"[Audiobook Job {job_id}] Updated book {book_id} with audiobook path")
-                finally:
-                    db_session.close()
-            except Exception as db_error:
-                print(f"[Audiobook Job {job_id}] Failed to update book record: {str(db_error)}")
+                crud.update_pdf_book(db_session, book_id=book_id, book_update=PDFBookUpdate(audiobook_path=final_audio_path))
+                db_session.commit()
+                print(f"[Audiobook Job {job_id}] Updated book {book_id} with audiobook path")
+            finally:
+                db_session.close()
+        except Exception as db_error:
+            print(f"[Audiobook Job {job_id}] Failed to update book record: {str(db_error)}")
         
         print(f"[Audiobook Job {job_id}] Generation completed successfully")
     except Exception as e:
