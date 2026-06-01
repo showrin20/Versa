@@ -1,17 +1,28 @@
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends
-from fastapi.responses import FileResponse, RedirectResponse
-from typing import Dict, Any, Optional
-from pydantic import BaseModel
-from sqlalchemy.orm import Session
+import json
 import uuid
 import os
 import re
-from pathlib import Path
-from pydub import AudioSegment
 import asyncio
+from pathlib import Path
+from typing import Dict, Any, Optional
+
 import edge_tts
+from fastapi import APIRouter, HTTPException, Depends
+from fastapi.responses import FileResponse, RedirectResponse
+from pydantic import BaseModel
+from pydub import AudioSegment
+from sqlalchemy.orm import Session
+
 from app.core.database import get_db
 from app.crud import crud
+from app.schemas.schemas import PDFBookUpdate, YouTubeUploadStatus
+
+
+def _has_speakable_content(text: str) -> bool:
+    """Return True only if the text has enough real word characters for TTS."""
+    # Count alphanumeric characters (letters + digits)
+    word_chars = sum(1 for c in text if c.isalnum())
+    return word_chars >= 5
 
 router = APIRouter()
 
@@ -84,7 +95,6 @@ def download_audiobook(job_id: str):
 
     audio_path = job["audio_path"]
 
-    # If stored in Supabase Storage, redirect to public URL
     if audio_path.startswith("http"):
         return RedirectResponse(url=audio_path)
 
@@ -111,7 +121,6 @@ def download_book_audiobook(book_id: int, db: Session = Depends(get_db)):
     if not book.audiobook_path:
         raise HTTPException(status_code=404, detail="No audiobook generated for this book yet")
 
-    # If stored in Supabase Storage, redirect to public URL
     if book.audiobook_path.startswith("http"):
         return RedirectResponse(url=book.audiobook_path)
 
@@ -125,6 +134,60 @@ def download_book_audiobook(book_id: int, db: Session = Depends(get_db)):
         media_type="audio/mpeg",
         filename=filename,
         headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
+
+
+@router.post("/book/{book_id}/upload-youtube")
+def trigger_youtube_upload(book_id: int, db: Session = Depends(get_db)):
+    """
+    Enqueue a Celery task that splits (if needed), uploads, and playlists an audiobook.
+    Returns immediately — use the youtube-status endpoint to poll progress.
+    """
+    book = crud.get_pdf_book(db, book_id=book_id)
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    if not book.audiobook_path:
+        raise HTTPException(status_code=400, detail="No audiobook generated for this book yet")
+    active_states = {"pending", "uploading", "playlist_pending"}
+    if book.youtube_upload_state in active_states:
+        raise HTTPException(status_code=409, detail="YouTube upload already in progress")
+
+    from app.services.youtube_tasks import upload_audiobook_to_youtube
+    task = upload_audiobook_to_youtube.delay(book_id, book.audiobook_path, book.name)
+
+    crud.update_pdf_book(db, book_id=book_id, book_update=PDFBookUpdate(
+        youtube_upload_state="pending",
+        youtube_upload_job_id=task.id,
+        youtube_video_ids=json.dumps([]),
+        youtube_current_part=0,
+        youtube_total_parts=None,
+        youtube_playlist_url=None,
+    ))
+
+    return {"job_id": task.id, "state": "pending"}
+
+
+@router.get("/book/{book_id}/youtube-status", response_model=YouTubeUploadStatus)
+def get_youtube_status(book_id: int, db: Session = Depends(get_db)):
+    """Return the current YouTube upload state for a book."""
+    book = crud.get_pdf_book(db, book_id=book_id)
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    video_ids: list = []
+    if book.youtube_video_ids:
+        try:
+            video_ids = json.loads(book.youtube_video_ids)
+        except (ValueError, TypeError):
+            pass
+
+    return YouTubeUploadStatus(
+        state=book.youtube_upload_state,
+        current_part=book.youtube_current_part,
+        total_parts=book.youtube_total_parts,
+        video_ids=video_ids,
+        playlist_url=book.youtube_playlist_url,
+        job_id=book.youtube_upload_job_id,
     )
 
 
@@ -155,7 +218,7 @@ async def _run_generation(job_id: str, book_id: int, voice: str, style: str, fmt
             # Skip chunks that are too small
             if len(para) < MIN_CHUNK_SIZE:
                 continue
-                
+
             if len(para) <= MAX_CHUNK_SIZE:
                 final_chunks.append(para)
             else:
@@ -171,9 +234,13 @@ async def _run_generation(job_id: str, book_id: int, voice: str, style: str, fmt
                         current_chunk = sentence
                 if current_chunk and len(current_chunk) >= MIN_CHUNK_SIZE:
                     final_chunks.append(current_chunk.strip())
-        
-        # Filter out any remaining small chunks
-        paragraphs = [p for p in final_chunks if len(p) >= MIN_CHUNK_SIZE]
+
+        # Filter out chunks with no speakable content (e.g. lines that are only
+        # dots, dashes, whitespace, or other non-word characters that TTS rejects)
+        paragraphs = [
+            p for p in final_chunks
+            if len(p) >= MIN_CHUNK_SIZE and _has_speakable_content(p)
+        ]
         
         if not paragraphs:
             raise RuntimeError("No valid text chunks found to generate audio")
@@ -258,10 +325,12 @@ async def _run_generation(job_id: str, book_id: int, voice: str, style: str, fmt
                         print(f"[Audiobook Job {job_id}] Error on chunk {idx+1} (attempt {attempt + 1}): {str(chunk_error)}, retrying...")
                         continue
                     else:
-                        # After all retries failed, this is critical - we can't skip text
-                        print(f"[Audiobook Job {job_id}] CRITICAL: Failed to generate chunk {idx+1} after {MAX_RETRIES} attempts")
-                        print(f"[Audiobook Job {job_id}] Error: {str(chunk_error)}")
-                        raise RuntimeError(f"Failed to generate chunk {idx+1} (text: '{cleaned_para[:100]}...') after {MAX_RETRIES} attempts: {str(chunk_error)}")
+                        # After all retries failed, skip the chunk instead of
+                        # aborting the whole job — these are typically junk chunks
+                        # (dots, table-of-contents lines, etc.) with no real speech.
+                        print(f"[Audiobook Job {job_id}] WARNING: Skipping chunk {idx+1} after {MAX_RETRIES} failed attempts: {str(chunk_error)}")
+                        print(f"[Audiobook Job {job_id}] Skipped text preview: '{cleaned_para[:80]}...'")
+                        break  # move on to the next chunk
         
         if len(parts_files) == 0:
             raise RuntimeError("No audio chunks were successfully generated")
@@ -309,25 +378,24 @@ async def _run_generation(job_id: str, book_id: int, voice: str, style: str, fmt
             except Exception:
                 pass
 
-        # Try to upload the finished audiobook to Supabase Storage
+        # Upload to object storage (MinIO), fall back to local path if unavailable
         final_audio_path = str(out_file)
         try:
             from app.core.storage import get_storage
             storage = get_storage()
             if storage:
-                print(f"[Audiobook Job {job_id}] Uploading audiobook to Supabase Storage")
+                print(f"[Audiobook Job {job_id}] Uploading audiobook to object storage")
                 with open(out_file, "rb") as f:
                     audio_bytes = f.read()
-                supabase_url = storage.upload_audiobook_bytes(audio_bytes, out_file.name)
-                final_audio_path = supabase_url
-                print(f"[Audiobook Job {job_id}] Uploaded to Supabase: {supabase_url}")
-                # Clean up local file after successful upload
+                storage_url = storage.upload_audiobook_bytes(audio_bytes, out_file.name)
+                final_audio_path = storage_url
+                print(f"[Audiobook Job {job_id}] Uploaded: {storage_url}")
                 try:
                     out_file.unlink()
                 except Exception:
                     pass
         except Exception as upload_err:
-            print(f"[Audiobook Job {job_id}] Supabase upload failed, keeping local file: {upload_err}")
+            print(f"[Audiobook Job {job_id}] Object storage upload failed, keeping local file: {upload_err}")
 
         JOBS[job_id]["state"] = "completed"
         JOBS[job_id]["progress"] = 100

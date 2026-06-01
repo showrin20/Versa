@@ -44,7 +44,13 @@ class PDFBook(Base):
     progress_percentage = Column(Float, default=0.0)
     reading_mode = Column(String, default="chunk")  # chunk or sentence
     status = Column(String, default="reading")  # reading, completed, paused
-    audiobook_path = Column(String, nullable=True)  # Path to generated audiobook file
+    audiobook_path = Column(String, nullable=True)
+    youtube_upload_state = Column(String, nullable=True)  # pending|uploading|playlist_pending|completed|partial|failed
+    youtube_video_ids = Column(Text, nullable=True)       # JSON array of video IDs in upload order
+    youtube_playlist_url = Column(String, nullable=True)
+    youtube_upload_job_id = Column(String, nullable=True)
+    youtube_current_part = Column(Integer, nullable=True)
+    youtube_total_parts = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

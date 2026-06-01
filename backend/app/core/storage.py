@@ -1,95 +1,108 @@
 """
-Supabase Storage utility for handling PDF and audiobook uploads
+MinIO object storage for PDF and audiobook files.
+Falls back gracefully when MinIO is not configured.
 """
-from supabase import create_client, Client
-from app.core.config import settings
+import io
+import json
 from typing import Optional
+from urllib.parse import urlparse
+
+from app.core.config import settings
 
 
-class SupabaseStorage:
-    """Handle file uploads to Supabase Storage"""
-
+class MinioStorage:
     def __init__(self):
-        if not settings.supabase_url or not settings.supabase_key:
-            raise ValueError("Supabase URL and Key must be set in environment variables")
+        from minio import Minio
 
-        # Use service_role key for server-side operations (bypasses RLS)
-        # Fall back to anon key if service key not provided
-        api_key = settings.supabase_service_key or settings.supabase_key
-        self.client: Client = create_client(settings.supabase_url, api_key)
-        self.pdf_bucket = "pdfs"
-        self.audiobook_bucket = "audiobooks"
+        self.client = Minio(
+            endpoint=settings.minio_endpoint,
+            access_key=settings.minio_access_key,
+            secret_key=settings.minio_secret_key,
+            secure=settings.minio_secure,
+        )
+        self.pdf_bucket = settings.minio_bucket_pdf
+        self.audiobook_bucket = settings.minio_bucket_audiobooks
+        self._ensure_bucket(self.pdf_bucket)
+        self._ensure_bucket(self.audiobook_bucket)
 
-    def upload_pdf(self, file_path: str, destination_path: str) -> str:
-        """Upload a PDF file from disk to Supabase Storage, returns public URL."""
-        with open(file_path, 'rb') as f:
-            file_data = f.read()
-        return self.upload_pdf_bytes(file_data, destination_path)
+    def _ensure_bucket(self, bucket: str) -> None:
+        if not self.client.bucket_exists(bucket):
+            self.client.make_bucket(bucket)
+        # Set public read policy so stored URLs are directly accessible
+        policy = json.dumps({
+            "Version": "2012-10-17",
+            "Statement": [{
+                "Effect": "Allow",
+                "Principal": {"AWS": "*"},
+                "Action": ["s3:GetObject"],
+                "Resource": [f"arn:aws:s3:::{bucket}/*"],
+            }],
+        })
+        self.client.set_bucket_policy(bucket, policy)
+
+    def _public_url(self, bucket: str, path: str) -> str:
+        base = settings.minio_public_url or f"http://{settings.minio_endpoint}"
+        return f"{base}/{bucket}/{path}"
 
     def upload_pdf_bytes(self, file_bytes: bytes, destination_path: str) -> str:
-        """Upload PDF bytes to Supabase Storage, returns public URL."""
-        self.client.storage.from_(self.pdf_bucket).upload(
-            path=destination_path,
-            file=file_bytes,
-            file_options={"content-type": "application/pdf", "upsert": "true"}
+        self.client.put_object(
+            self.pdf_bucket,
+            destination_path,
+            io.BytesIO(file_bytes),
+            length=len(file_bytes),
+            content_type="application/pdf",
         )
-        return self.client.storage.from_(self.pdf_bucket).get_public_url(destination_path)
-
-    def upload_audiobook(self, file_path: str, destination_path: str) -> str:
-        """Upload an audiobook file from disk to Supabase Storage, returns public URL."""
-        with open(file_path, 'rb') as f:
-            file_data = f.read()
-        return self.upload_audiobook_bytes(file_data, destination_path)
+        return self._public_url(self.pdf_bucket, destination_path)
 
     def upload_audiobook_bytes(self, file_bytes: bytes, destination_path: str) -> str:
-        """Upload audiobook bytes to Supabase Storage, returns public URL."""
-        self.client.storage.from_(self.audiobook_bucket).upload(
-            path=destination_path,
-            file=file_bytes,
-            file_options={"content-type": "audio/mpeg", "upsert": "true"}
+        self.client.put_object(
+            self.audiobook_bucket,
+            destination_path,
+            io.BytesIO(file_bytes),
+            length=len(file_bytes),
+            content_type="audio/mpeg",
         )
-        return self.client.storage.from_(self.audiobook_bucket).get_public_url(destination_path)
+        return self._public_url(self.audiobook_bucket, destination_path)
 
-    def delete_pdf(self, file_path: str) -> bool:
-        """Delete a PDF from storage"""
+    def delete_pdf(self, object_key: str) -> bool:
         try:
-            self.client.storage.from_(self.pdf_bucket).remove([file_path])
+            self.client.remove_object(self.pdf_bucket, object_key)
             return True
         except Exception as e:
-            print(f"Error deleting PDF: {e}")
+            print(f"Error deleting PDF from MinIO: {e}")
             return False
 
-    def delete_audiobook(self, file_path: str) -> bool:
-        """Delete an audiobook from storage"""
+    def delete_audiobook(self, object_key: str) -> bool:
         try:
-            self.client.storage.from_(self.audiobook_bucket).remove([file_path])
+            self.client.remove_object(self.audiobook_bucket, object_key)
             return True
         except Exception as e:
-            print(f"Error deleting audiobook: {e}")
+            print(f"Error deleting audiobook from MinIO: {e}")
             return False
 
-    def get_pdf_url(self, file_path: str) -> str:
-        """Get public URL for a PDF"""
-        return self.client.storage.from_(self.pdf_bucket).get_public_url(file_path)
+    def get_pdf_url(self, object_key: str) -> str:
+        return self._public_url(self.pdf_bucket, object_key)
 
-    def get_audiobook_url(self, file_path: str) -> str:
-        """Get public URL for an audiobook"""
-        return self.client.storage.from_(self.audiobook_bucket).get_public_url(file_path)
+    def get_audiobook_url(self, object_key: str) -> str:
+        return self._public_url(self.audiobook_bucket, object_key)
 
 
-# Singleton instance
-_storage_instance: Optional[SupabaseStorage] = None
+def _extract_object_key(url: str) -> str:
+    """Extract the object key from a MinIO URL: http://host:port/bucket/key → key"""
+    parsed = urlparse(url)
+    parts = parsed.path.lstrip("/").split("/", 1)
+    return parts[1] if len(parts) == 2 else parsed.path.lstrip("/")
 
 
-def get_storage() -> Optional[SupabaseStorage]:
-    """Get or create storage instance"""
+_storage_instance: Optional[MinioStorage] = None
+
+
+def get_storage() -> Optional[MinioStorage]:
     global _storage_instance
-
     if _storage_instance is None:
         try:
-            _storage_instance = SupabaseStorage()
-        except ValueError as e:
-            print(f"Supabase Storage not configured: {e}")
+            _storage_instance = MinioStorage()
+        except Exception as e:
+            print(f"MinIO storage not available: {e}")
             return None
-
     return _storage_instance

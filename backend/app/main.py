@@ -10,8 +10,29 @@ from pathlib import Path
 Path("./data/audiobooks").mkdir(parents=True, exist_ok=True)
 Path("./uploads").mkdir(parents=True, exist_ok=True)
 
-# Create tables
+# Create tables (no-op for already-existing tables)
 Base.metadata.create_all(bind=engine)
+
+# Add any new columns that didn't exist when the container was first started.
+# Uses IF NOT EXISTS so it's safe to run on every boot.
+_YOUTUBE_COLUMNS = [
+    ("youtube_upload_state", "VARCHAR"),
+    ("youtube_video_ids", "TEXT"),
+    ("youtube_playlist_url", "VARCHAR"),
+    ("youtube_upload_job_id", "VARCHAR"),
+    ("youtube_current_part", "INTEGER"),
+    ("youtube_total_parts", "INTEGER"),
+]
+from sqlalchemy import text as _text
+with engine.connect() as _conn:
+    for _col, _type in _YOUTUBE_COLUMNS:
+        try:
+            _conn.execute(_text(
+                f"ALTER TABLE pdf_books ADD COLUMN IF NOT EXISTS {_col} {_type}"
+            ))
+            _conn.commit()
+        except Exception:
+            _conn.rollback()
 
 app = FastAPI(
     title="Versatile API",

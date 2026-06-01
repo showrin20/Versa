@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { pdfBooksAPI, readingSessionsAPI } from '../services/api';
+import { pdfBooksAPI, readingSessionsAPI, audiobooksAPI } from '../services/api';
 import type { PDFBook, ReadingSession, ReadingSessionCreate } from '../types';
 import { useTheme } from '../context/ThemeContext';
 
@@ -153,6 +153,13 @@ const PDFReader: React.FC = () => {
   const [audioGenProgress, setAudioGenProgress] = useState(0);
   const [audioDownloadUrl, setAudioDownloadUrl] = useState<string | null>(null);
 
+  const [ytState, setYtState] = useState<string | null>(null);
+  const [ytCurrentPart, setYtCurrentPart] = useState(0);
+  const [ytTotalParts, setYtTotalParts] = useState(0);
+  const [ytVideoIds, setYtVideoIds] = useState<string[]>([]);
+  const [ytPlaylistUrl, setYtPlaylistUrl] = useState<string | null>(null);
+  const ytPollRef = useRef<number | null>(null);
+
   const [pageAnim, setPageAnim] = useState<'idle' | 'forward' | 'backward'>('idle');
   const [showPdfView, setShowPdfView] = useState(true);
 
@@ -181,6 +188,7 @@ const PDFReader: React.FC = () => {
     }
     return () => {
       if (timerRef.current) window.clearInterval(timerRef.current);
+      if (ytPollRef.current) window.clearInterval(ytPollRef.current);
       if (typeof window !== 'undefined' && window.speechSynthesis) {
         window.speechSynthesis.cancel();
         window.speechSynthesis.onvoiceschanged = null;
@@ -213,6 +221,28 @@ const PDFReader: React.FC = () => {
     const normalized = pageFromChunk % 2 === 0 ? Math.max(1, pageFromChunk - 1) : pageFromChunk;
     setCurrentPageNum(normalized);
   }, [currentChunk, chunks]);
+
+  const YT_ACTIVE_STATES = ['pending', 'uploading', 'playlist_pending'];
+  useEffect(() => {
+    if (!activeBook || !YT_ACTIVE_STATES.includes(ytState || '')) {
+      if (ytPollRef.current) { window.clearInterval(ytPollRef.current); ytPollRef.current = null; }
+      return;
+    }
+    ytPollRef.current = window.setInterval(async () => {
+      try {
+        const status = await audiobooksAPI.getYouTubeStatus(activeBook.id);
+        setYtState(status.state);
+        setYtCurrentPart(status.current_part ?? 0);
+        setYtTotalParts(status.total_parts ?? 0);
+        setYtVideoIds(status.video_ids ?? []);
+        setYtPlaylistUrl(status.playlist_url ?? null);
+        if (!YT_ACTIVE_STATES.includes(status.state || '')) {
+          window.clearInterval(ytPollRef.current!); ytPollRef.current = null;
+        }
+      } catch (e) { console.error('YouTube status poll failed', e); }
+    }, 3000);
+    return () => { if (ytPollRef.current) { window.clearInterval(ytPollRef.current); ytPollRef.current = null; } };
+  }, [activeBook, ytState]);
 
   const renderPageToCanvas = useCallback(
     async (pageNum: number, canvas: HTMLCanvasElement | null) => {
@@ -295,14 +325,22 @@ const PDFReader: React.FC = () => {
       setIsProcessing(true);
       setLoadingText(`Opening "${book.name}"...`);
       setIsReading(true); setActiveBook(book); setChunks([]);
-      
-      // Check if audiobook exists for this book
-      if ((book as any).audiobook_path) {
+
+      if (book.audiobook_path) {
         setAudioDownloadUrl(`${API_BASE_URL}/audiobooks/book/${book.id}/download`);
       } else {
         setAudioDownloadUrl(null);
       }
-      
+
+      // Restore YouTube upload state from DB
+      setYtState(book.youtube_upload_state ?? null);
+      setYtCurrentPart(book.youtube_current_part ?? 0);
+      setYtTotalParts(book.youtube_total_parts ?? 0);
+      setYtPlaylistUrl(book.youtube_playlist_url ?? null);
+      try {
+        setYtVideoIds(book.youtube_video_ids ? JSON.parse(book.youtube_video_ids) : []);
+      } catch { setYtVideoIds([]); }
+
       const session = await readingSessionsAPI.create({ book_id: book.id, chunks_read: 0, time_spent: 0 } as ReadingSessionCreate);
       setStoredSession(session); setSessionStartTime(new Date());
       const response = await fetch(`${API_BASE_URL}/pdf-books/${book.id}/download`);
@@ -490,10 +528,10 @@ const PDFReader: React.FC = () => {
         if (status.state === 'completed') {
           // Use the book-specific download endpoint
           const bookDownloadUrl = `${API_BASE_URL}/audiobooks/book/${activeBook.id}/download`;
-          setAudioDownloadUrl(bookDownloadUrl); 
-          setAudioGenProgress(100); 
+          setAudioDownloadUrl(bookDownloadUrl);
+          setAudioGenProgress(100);
           setIsGeneratingAudio(false);
-          
+
           // Reload books to get updated audiobook_path
           await loadBooks();
           return;
@@ -506,6 +544,20 @@ const PDFReader: React.FC = () => {
     }
   };
 
+  const triggerYouTubeUpload = async () => {
+    if (!activeBook) return;
+    try {
+      const result = await audiobooksAPI.triggerYouTubeUpload(activeBook.id);
+      setYtState(result.state);
+      setYtCurrentPart(0);
+      setYtTotalParts(0);
+      setYtVideoIds([]);
+      setYtPlaylistUrl(null);
+    } catch (e: any) {
+      window.alert(e?.response?.data?.detail || 'Failed to start YouTube upload');
+    }
+  };
+
   const endReadingSession = async () => {
     try {
       if (storedSession && sessionStartTime) {
@@ -515,9 +567,11 @@ const PDFReader: React.FC = () => {
       if (activeBook && chunks.length > 0 && currentChunk >= chunks.length - 1) await pdfBooksAPI.update(activeBook.id, { status: 'completed' });
     } catch (error) { console.error(error); }
     finally {
+      if (ytPollRef.current) { window.clearInterval(ytPollRef.current); ytPollRef.current = null; }
       stopPreviewSpeech();
       setIsReading(false); setActiveBook(null); setChunks([]); setStoredSession(null); setSessionStartTime(null);
       setPdfDoc(null); setCurrentPageNum(1); setAudioGenProgress(0); setIsGeneratingAudio(false);
+      setYtState(null); setYtCurrentPart(0); setYtTotalParts(0); setYtVideoIds([]); setYtPlaylistUrl(null);
       await loadBooks(); await loadSessions();
     }
   };
@@ -1068,16 +1122,24 @@ const PDFReader: React.FC = () => {
                 const hasAudiobook = !!(book as any).audiobook_path;
 
                 return (
-                  <div key={book.id} className="glass-card" style={{ overflow: 'hidden' }}>
+                  <div
+                    key={book.id}
+                    className="glass-card"
+                    style={{ overflow: 'hidden', cursor: isEditing ? 'default' : 'pointer', transition: 'transform 0.18s ease, box-shadow 0.18s ease' }}
+                    onClick={() => { if (!isEditing) void startReading(book); }}
+                    onMouseEnter={(e) => { if (!isEditing) { (e.currentTarget as HTMLDivElement).style.transform = 'translateY(-4px)'; (e.currentTarget as HTMLDivElement).style.boxShadow = '0 16px 40px rgba(99,102,241,0.18)'; } }}
+                    onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.transform = ''; (e.currentTarget as HTMLDivElement).style.boxShadow = ''; }}
+                    title={isEditing ? '' : `Open "${book.name}"`}
+                  >
                     <div style={{ height: 5, background: 'var(--accent-gradient)' }} />
                     <div style={{ padding: '1.2rem' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.45rem' }}>
                         <div style={{ fontSize: '1.8rem' }}>{(book as any).status === 'completed' ? '✅' : '📘'}</div>
                         {hasAudiobook && (
-                          <div 
-                            style={{ 
-                              fontSize: '0.7rem', 
-                              padding: '0.3rem 0.6rem', 
+                          <div
+                            style={{
+                              fontSize: '0.7rem',
+                              padding: '0.3rem 0.6rem',
                               background: 'linear-gradient(135deg, rgba(16,185,129,0.15), rgba(5,150,105,0.15))',
                               border: '1px solid rgba(16,185,129,0.3)',
                               borderRadius: '6px',
@@ -1095,7 +1157,7 @@ const PDFReader: React.FC = () => {
                       </div>
 
                       {isEditing ? (
-                        <div style={{ marginBottom: '0.9rem' }}>
+                        <div style={{ marginBottom: '0.9rem' }} onClick={(e) => e.stopPropagation()}>
                           <input
                             type="text"
                             value={editingBookName}
@@ -1121,14 +1183,14 @@ const PDFReader: React.FC = () => {
                             <button
                               className="primary-btn"
                               style={{ flex: 1, padding: '0.4rem 0.6rem', fontSize: '0.75rem' }}
-                              onClick={() => handleRenameBook(book.id)}
+                              onClick={(e) => { e.stopPropagation(); handleRenameBook(book.id); }}
                             >
                               Save
                             </button>
                             <button
                               className="secondary-btn"
                               style={{ flex: 1, padding: '0.4rem 0.6rem', fontSize: '0.75rem' }}
-                              onClick={cancelEditingBook}
+                              onClick={(e) => { e.stopPropagation(); cancelEditingBook(); }}
                             >
                               Cancel
                             </button>
@@ -1149,24 +1211,24 @@ const PDFReader: React.FC = () => {
                         <div style={{ width: `${Number((book as any).progress_percentage || 0)}%` }} />
                       </div>
 
-                      <div style={{ display: 'flex', gap: '0.5rem' }}>
+                      <div style={{ display: 'flex', gap: '0.5rem' }} onClick={(e) => e.stopPropagation()}>
                         <button className="primary-btn" style={{ flex: 1, padding: '0.75rem 1rem' }} onClick={() => void startReading(book)}>
                           {(book as any).current_chunk ? 'Continue reading' : 'Start reading'}
                         </button>
                       </div>
 
-                      <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.6rem' }}>
+                      <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.6rem' }} onClick={(e) => e.stopPropagation()}>
                         <button
                           className="secondary-btn"
                           style={{ flex: 1, padding: '0.5rem', fontSize: '0.75rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.3rem' }}
-                          onClick={() => startEditingBook(book.id, book.name)}
+                          onClick={(e) => { e.stopPropagation(); startEditingBook(book.id, book.name); }}
                         >
                           ✏️ Rename
                         </button>
                         <button
                           className="secondary-btn"
                           style={{ flex: 1, padding: '0.5rem', fontSize: '0.75rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.3rem', color: '#ef4444', borderColor: 'rgba(239, 68, 68, 0.3)' }}
-                          onClick={() => handleDeleteBook(book.id, book.name)}
+                          onClick={(e) => { e.stopPropagation(); handleDeleteBook(book.id, book.name); }}
                         >
                           🗑️ Delete
                         </button>
@@ -1283,6 +1345,88 @@ const PDFReader: React.FC = () => {
                   </div>
                 )}
 
+                {/* ─── YouTube Upload Banner ─── */}
+                {ytState && ytState !== null && (
+                  <div className="download-banner" style={{
+                    borderColor: ytState === 'completed' ? 'rgba(239,68,68,0.35)'
+                      : ytState === 'partial' ? 'rgba(245,158,11,0.35)'
+                      : ytState === 'failed' ? 'rgba(239,68,68,0.25)'
+                      : 'rgba(239,68,68,0.3)',
+                    background: 'linear-gradient(135deg, rgba(239,68,68,0.08) 0%, rgba(220,38,38,0.06) 100%)',
+                  }}>
+                    <div style={{ fontSize: '1.6rem', flexShrink: 0, position: 'relative', zIndex: 1 }}>
+                      {ytState === 'completed' ? '▶' : ytState === 'failed' ? '✗' : ytState === 'partial' ? '⚠' : '⏫'}
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0, position: 'relative', zIndex: 1 }}>
+                      {(ytState === 'pending' || ytState === 'uploading' || ytState === 'playlist_pending') && (
+                        <>
+                          <div style={{ fontWeight: 700, color: 'var(--text-main)', fontSize: '0.92rem', marginBottom: '0.35rem' }}>
+                            {ytState === 'playlist_pending'
+                              ? 'Creating YouTube Playlist...'
+                              : ytTotalParts > 1 && ytCurrentPart > 0
+                                ? `Uploading Part ${ytCurrentPart} of ${ytTotalParts}...`
+                                : 'Uploading to YouTube...'}
+                          </div>
+                          {ytTotalParts > 1 && (
+                            <>
+                              <div className="progress-bar" style={{ height: 7, marginBottom: '0.3rem' }}>
+                                <div style={{ width: `${ytTotalParts > 0 ? Math.round(((ytCurrentPart - 1) / ytTotalParts) * 100) : 0}%`, background: 'linear-gradient(90deg,#ef4444,#dc2626)' }} />
+                              </div>
+                              <div style={{ color: 'var(--text-muted)', fontSize: '0.76rem' }}>
+                                {ytCurrentPart > 0 ? `Part ${ytCurrentPart}/${ytTotalParts}` : 'Preparing...'} · {ytVideoIds.length} uploaded
+                              </div>
+                            </>
+                          )}
+                          {ytTotalParts === 1 && (
+                            <div style={{ color: 'var(--text-muted)', fontSize: '0.76rem' }}>
+                              <span style={{ display: 'inline-block', animation: 'spin 1.5s linear infinite', marginRight: '0.4rem' }}>↻</span>
+                              Uploading single-part audiobook...
+                            </div>
+                          )}
+                        </>
+                      )}
+                      {(ytState === 'completed' || ytState === 'partial') && (
+                        <>
+                          <div style={{ fontWeight: 700, color: 'var(--text-main)', fontSize: '0.92rem', marginBottom: '0.3rem' }}>
+                            {ytState === 'completed'
+                              ? (ytTotalParts > 1 ? `YouTube Upload Complete (${ytVideoIds.length} parts)` : 'YouTube Upload Complete')
+                              : `Partial Upload (${ytVideoIds.length}/${ytTotalParts} parts)`}
+                          </div>
+                          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.35rem' }}>
+                            {ytPlaylistUrl && (
+                              <a href={ytPlaylistUrl} target="_blank" rel="noopener noreferrer"
+                                style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.42rem 0.9rem', background: 'linear-gradient(135deg,#ef4444,#dc2626)', color: 'white', borderRadius: 9, textDecoration: 'none', fontSize: '0.82rem', fontWeight: 700, boxShadow: '0 4px 12px rgba(239,68,68,0.3)' }}>
+                                ▶ View Playlist
+                              </a>
+                            )}
+                            {!ytPlaylistUrl && ytVideoIds.length === 1 && (
+                              <a href={`https://www.youtube.com/watch?v=${ytVideoIds[0]}`} target="_blank" rel="noopener noreferrer"
+                                style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.42rem 0.9rem', background: 'linear-gradient(135deg,#ef4444,#dc2626)', color: 'white', borderRadius: 9, textDecoration: 'none', fontSize: '0.82rem', fontWeight: 700, boxShadow: '0 4px 12px rgba(239,68,68,0.3)' }}>
+                                ▶ Watch on YouTube
+                              </a>
+                            )}
+                            {!ytPlaylistUrl && ytVideoIds.length > 1 && ytVideoIds.map((vid, i) => (
+                              <a key={vid} href={`https://www.youtube.com/watch?v=${vid}`} target="_blank" rel="noopener noreferrer"
+                                style={{ padding: '0.32rem 0.65rem', background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444', borderRadius: 7, textDecoration: 'none', fontSize: '0.78rem', fontWeight: 600 }}>
+                                Part {i + 1}
+                              </a>
+                            ))}
+                          </div>
+                        </>
+                      )}
+                      {ytState === 'failed' && (
+                        <div style={{ color: '#ef4444', fontSize: '0.85rem', fontWeight: 600 }}>
+                          Upload failed — check YouTube credentials in your environment config.
+                        </div>
+                      )}
+                    </div>
+                    {(ytState === 'completed' || ytState === 'partial' || ytState === 'failed') && (
+                      <button className="secondary-btn" style={{ padding: '0.5rem 0.7rem', fontSize: '0.78rem', position: 'relative', zIndex: 1 }}
+                        onClick={() => setYtState(null)} title="Dismiss">✕</button>
+                    )}
+                  </div>
+                )}
+
                 {/* Settings panel (collapsible) */}
                 {showSettings && (
                   <div className="glass-card" style={{ padding: '1.1rem', marginBottom: '0.85rem' }}>
@@ -1371,6 +1515,16 @@ const PDFReader: React.FC = () => {
                           )}
                           {audioDownloadUrl && !isGeneratingAudio && (
                             <button className="secondary-btn" style={{ padding: '0.6rem 1rem' }} onClick={downloadExistingAudiobook}>⬇ MP3</button>
+                          )}
+                          {audioDownloadUrl && !isGeneratingAudio && !['pending','uploading','playlist_pending'].includes(ytState || '') && (
+                            <button
+                              className="secondary-btn"
+                              style={{ padding: '0.6rem 1rem', display: 'flex', alignItems: 'center', gap: '0.4rem', borderColor: 'rgba(239,68,68,0.35)', color: '#ef4444' }}
+                              onClick={() => void triggerYouTubeUpload()}
+                              title="Upload audiobook to YouTube"
+                            >
+                              ▶ YouTube
+                            </button>
                           )}
                         </div>
                       </div>

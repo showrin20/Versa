@@ -27,8 +27,8 @@ const fmtDur = (hrs: number): string => {
 };
 
 const ls = {
-  get: <T,>(k: string, def: T): T => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : def; } catch { return def; } },
-  set: (k: string, v: any) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { } },
+  get: <T = unknown>(k: string, def: T | null = null): T | null => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) as T : def; } catch { return def; } },
+  set: (k: string, v: unknown) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { } },
 };
 
 const parseNotesAndTasks = (raw = "") => {
@@ -48,19 +48,19 @@ const parseNotesAndTasks = (raw = "") => {
 // ─── Component ────────────────────────────────────────────────────────────────
 export default function OfficeHours() {
   const [now, setNow] = useState(new Date());
-  const [entries, setEntries] = useState<any[]>(() => ls.get(ENTRIES_KEY, []));
-  const [schedule, setSchedule] = useState(() => ls.get(SCHEDULE_KEY, DEFAULT_SCHED));
-  const [draftSched, setDraftSched] = useState(schedule);
+  const [entries, setEntries] = useState<Array<Record<string, any>>>(() => ls.get<Array<Record<string, any>>>(ENTRIES_KEY, []) ?? []);
+  const [schedule, setSchedule] = useState<typeof DEFAULT_SCHED>(() => ls.get<typeof DEFAULT_SCHED>(SCHEDULE_KEY, DEFAULT_SCHED) ?? DEFAULT_SCHED);
+  const [draftSched, setDraftSched] = useState<typeof DEFAULT_SCHED>(schedule);
   const [showSchedEd, setShowSchedEd] = useState(false);
-  const [tasks, setTasks] = useState<any[]>(() => ls.get(TASKS_PREFIX + todayKey(), []));
+  const [tasks, setTasks] = useState<Array<Record<string, any>>>(() => ls.get<Array<Record<string, any>>>(TASKS_PREFIX + todayKey(), []) ?? []);
   const [newTask, setNewTask] = useState("");
   const [newCat, setNewCat] = useState<keyof typeof CAT>("other");
   const [tab, setTab] = useState("today");
   const [expanded, setExpanded] = useState<number | null>(null);
   const [notes, setNotes] = useState("");
-  const notesTimer = useRef<NodeJS.Timeout | null>(null);
+  const notesTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const todayEntry = entries.find((e: any) => e.date === todayKey()) || null;
+  const todayEntry = (entries as Array<Record<string, any>>).find((e) => e.date === todayKey()) || null;
   const isCheckedIn = !!(todayEntry?.checkIn && !todayEntry?.checkOut);
   const isOnBreak = !!(todayEntry?.breakStart && !todayEntry?.breakEnd);
 
@@ -74,19 +74,19 @@ export default function OfficeHours() {
   }, []);
 
   // ── Entry helpers ──────────────────────────────────────────────────────────
-  const updateEntry = (date: string, patch: any) => {
-    setEntries((prev: any[]) => {
-      const exists = prev.find((e: any) => e.date === date);
-      let next;
+  const updateEntry = (date: string, patch: Record<string, unknown>) => {
+    setEntries((prev: Array<Record<string, any>>) => {
+      const exists = prev.find((e) => e.date === date);
+      let next: Array<Record<string, any>>;
       if (exists) {
-        next = prev.map((e: any) => e.date === date ? { ...e, ...patch } : e);
+        next = prev.map((e) => e.date === date ? { ...e, ...patch } : e);
       } else {
         next = [{
           id: Date.now(), date, checkIn: null, checkOut: null,
           breakStart: null, breakEnd: null, breakMins: 0,
           totalHours: 0, notes: ""
         }, ...prev]
-          .map((e: any) => e.date === date ? { ...e, ...patch } : e);
+          .map((e) => e.date === date ? { ...e, ...patch } : e);
       }
       ls.set(ENTRIES_KEY, next);
       return next;
@@ -106,9 +106,9 @@ export default function OfficeHours() {
     const ci = t2h(todayEntry.checkIn);
     const co = t2h(checkOut);
     const totalHours = Math.max(0, co - ci - (todayEntry.breakMins || 0) / 60);
-    const currentTasks: any[] = ls.get(TASKS_PREFIX + todayKey(), []);
+    const currentTasks = ls.get<Array<Record<string, any>>>(TASKS_PREFIX + todayKey(), []) ?? [];
     const taskLine = currentTasks.length
-      ? "\n\n--- Tasks ---\n" + currentTasks.map((t: any) => `[${t.category}] ${t.time} — ${t.description}`).join("\n")
+      ? "\n\n--- Tasks ---\n" + currentTasks.map((t) => `[${t.category}] ${t.time} — ${t.description}`).join("\n")
       : "";
     updateEntry(todayKey(), { checkOut, totalHours, notes: (notes || "") + taskLine });
   };
@@ -143,7 +143,7 @@ export default function OfficeHours() {
   };
 
   const removeTask = (id: string) => {
-    const updated = tasks.filter((t: any) => t.id !== id);
+    const updated = (tasks as Array<Record<string, any>>).filter((t) => t.id !== id);
     setTasks(updated);
     ls.set(TASKS_PREFIX + todayKey(), updated);
   };
@@ -178,9 +178,9 @@ export default function OfficeHours() {
 
   const weekTotal = () => {
     const w = new Date(); w.setDate(w.getDate() - 7);
-    return entries
-      .filter((e: any) => new Date(e.date) >= w)
-      .reduce((s: number, e: any) => s + (e.totalHours || 0), 0);
+    return (entries as Array<Record<string, any>>)
+      .filter((e) => new Date(e.date) >= w)
+      .reduce((s: number, e) => s + (e.totalHours || 0), 0);
   };
 
   const greeting = () => {
@@ -256,8 +256,8 @@ export default function OfficeHours() {
               {[["Start time", "startTime"], ["End time", "endTime"]].map(([label, key]) => (
                 <div key={key}>
                   <label className="block text-xs text-gray-600 dark:text-slate-400 mb-1.5 font-medium">{label}</label>
-                  <input type="time" value={(draftSched as any)[key]}
-                    onChange={e => setDraftSched((d: any) => ({ ...d, [key]: e.target.value }))}
+                  <input type="time" value={(draftSched as Record<string, string>)[key]}
+                    onChange={e => setDraftSched((d: typeof DEFAULT_SCHED) => ({ ...d, [key]: e.target.value }))}
                     className="w-full bg-gray-100 dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-lg px-3 py-2.5 text-gray-900 dark:text-slate-100 font-mono text-sm focus:outline-none focus:border-blue-500 transition-colors"
                   />
                 </div>
@@ -281,8 +281,8 @@ export default function OfficeHours() {
                 <button key={p.label}
                   onClick={() => setDraftSched({ startTime: p.s, endTime: p.e })}
                   className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${draftSched.startTime === p.s && draftSched.endTime === p.e
-                      ? "bg-blue-600 border-blue-500 text-white"
-                      : "bg-gray-100 dark:bg-slate-800 border-gray-300 dark:border-slate-700 text-gray-600 dark:text-slate-400 hover:border-gray-400 dark:hover:border-slate-600"
+                    ? "bg-blue-600 border-blue-500 text-white"
+                    : "bg-gray-100 dark:bg-slate-800 border-gray-300 dark:border-slate-700 text-gray-600 dark:text-slate-400 hover:border-gray-400 dark:hover:border-slate-600"
                     }`}>
                   {p.label}
                 </button>
@@ -334,8 +334,8 @@ export default function OfficeHours() {
               </p>
             </div>
             <span className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${workedPct >= 100
-                ? "bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border-emerald-500/30"
-                : "bg-blue-500/20 text-blue-600 dark:text-blue-400 border-blue-500/30"
+              ? "bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border-emerald-500/30"
+              : "bg-blue-500/20 text-blue-600 dark:text-blue-400 border-blue-500/30"
               }`}>
               {workedPct >= 100 ? "✓ Goal reached" : `${Math.round(workedPct)}% done`}
             </span>
@@ -477,13 +477,13 @@ export default function OfficeHours() {
                   </button>
                 </div>
                 <div className="flex flex-wrap gap-1.5">
-                  {Object.keys(CAT).map(cat => (
-                    <button key={cat} onClick={() => setNewCat(cat as keyof typeof CAT)}
+                  {(Object.keys(CAT) as Array<keyof typeof CAT>).map(cat => (
+                    <button key={cat} onClick={() => setNewCat(cat)}
                       className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${newCat === cat
-                          ? CAT[cat as keyof typeof CAT].color + " ring-1 ring-current"
-                          : "bg-gray-100 dark:bg-slate-800 text-gray-500 dark:text-slate-500 border-gray-300 dark:border-slate-700 hover:border-gray-400 dark:hover:border-slate-600"
+                        ? CAT[cat].color + " ring-1 ring-current"
+                        : "bg-gray-100 dark:bg-slate-800 text-gray-500 dark:text-slate-500 border-gray-300 dark:border-slate-700 hover:border-gray-400 dark:hover:border-slate-600"
                         }`}>
-                      {CAT[cat as keyof typeof CAT].label}
+                      {CAT[cat].label}
                     </button>
                   ))}
                 </div>
@@ -494,7 +494,7 @@ export default function OfficeHours() {
                   <div className="text-center py-10 text-gray-400 dark:text-slate-600 text-sm">
                     No tasks yet — log what you've been working on!
                   </div>
-                ) : tasks.map((task: any) => (
+                ) : (tasks as Array<Record<string, any>>).map(task => (
                   <div key={task.id}
                     className="flex items-start gap-3 bg-gray-50 dark:bg-slate-800/50 rounded-lg px-3 py-2.5 group hover:bg-gray-100 dark:hover:bg-slate-800/80 transition-colors">
                     <div className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${CAT[task.category as keyof typeof CAT]?.dot || "bg-gray-400"}`} />
@@ -547,7 +547,7 @@ export default function OfficeHours() {
                   return (
                     <div key={entry.id}>
                       <div
-                        onClick={() => setExpanded(isExp ? null : i)}
+                        onClick={() => setExpanded(isExp ? null : i as number)}
                         className={`grid grid-cols-6 gap-2 px-5 py-3.5 text-sm cursor-pointer hover:bg-gray-50 dark:hover:bg-slate-800/30 transition-colors ${isToday ? "bg-blue-500/5" : ""}`}>
                         <div className="font-medium text-gray-800 dark:text-slate-200 flex items-center gap-2 flex-wrap">
                           {new Date(entry.date + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}
@@ -584,7 +584,7 @@ export default function OfficeHours() {
                             <div>
                               <p className="text-xs text-gray-500 dark:text-slate-500 uppercase tracking-wide font-semibold mb-2">Tasks completed</p>
                               <div className="space-y-1.5">
-                                {entryTasks.map((task: any) => (
+                                {(entryTasks as Array<Record<string, any>>).map(task => (
                                   <div key={task.id} className="flex items-start gap-3 bg-white dark:bg-slate-800/60 rounded-lg px-3 py-2.5 border border-gray-100 dark:border-transparent">
                                     <div className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${CAT[task.category as keyof typeof CAT]?.dot || "bg-gray-400"}`} />
                                     <div className="flex-1">
