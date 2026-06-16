@@ -1,14 +1,18 @@
 # Use Node.js 18 alpine image for smaller size
 FROM node:18-alpine as build
 
+# Accept build-time API URL (set to your backend URL or /api/v1 for nginx proxy)
+ARG VITE_API_URL=/api/v1
+ENV VITE_API_URL=$VITE_API_URL
+
 # Set working directory
 WORKDIR /app
 
 # Copy package files first for better caching
 COPY package*.json ./
 
-# Install dependencies
-RUN npm ci --only=production
+# Install all dependencies (including devDependencies needed for build)
+RUN npm ci
 
 # Copy source code
 COPY . .

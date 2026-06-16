@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import List, Optional
 from datetime import datetime
 
 # Office Hours Schemas
@@ -71,6 +71,7 @@ class PDFBookBase(BaseModel):
     progress_percentage: float = 0.0
     reading_mode: str = "chunk"
     status: str = "reading"
+    audiobook_path: Optional[str] = None
 
 class PDFBookCreate(BaseModel):
     name: str
@@ -83,16 +84,37 @@ class PDFBookUpdate(BaseModel):
     progress_percentage: Optional[float] = None
     reading_mode: Optional[str] = None
     status: Optional[str] = None
+    audiobook_path: Optional[str] = None
+    youtube_upload_state: Optional[str] = None
+    youtube_video_ids: Optional[str] = None
+    youtube_playlist_url: Optional[str] = None
+    youtube_upload_job_id: Optional[str] = None
+    youtube_current_part: Optional[int] = None
+    youtube_total_parts: Optional[int] = None
 
 class PDFBook(PDFBookBase):
     id: int
     original_filename: str
     file_path: str
+    youtube_upload_state: Optional[str] = None
+    youtube_video_ids: Optional[str] = None
+    youtube_playlist_url: Optional[str] = None
+    youtube_current_part: Optional[int] = None
+    youtube_total_parts: Optional[int] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
-    
+
     class Config:
         from_attributes = True
+
+
+class YouTubeUploadStatus(BaseModel):
+    state: Optional[str] = None
+    current_part: Optional[int] = None
+    total_parts: Optional[int] = None
+    video_ids: List[str] = []
+    playlist_url: Optional[str] = None
+    job_id: Optional[str] = None
 
 # Reading Session Schemas
 class ReadingSessionBase(BaseModel):

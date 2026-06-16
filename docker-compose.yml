@@ -1,7 +1,56 @@
-version: '3.8'
-
 services:
-  # Backend service
+  redis:
+    image: redis:7-alpine
+    container_name: versa-redis
+    command: redis-server --save "" --appendonly no
+    networks:
+      - versa-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: versa-postgres
+    environment:
+      POSTGRES_DB: versa
+      POSTGRES_USER: versa
+      POSTGRES_PASSWORD: versa
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - versa-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U versa -d versa"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    container_name: versa-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin123}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    networks:
+      - versa-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
   backend:
     build:
       context: ./backend
@@ -11,7 +60,29 @@ services:
       - "8000:8000"
     environment:
       - PYTHONPATH=/app
-      - DATABASE_URL=sqlite:///./data/app.db
+      - DATABASE_URL=postgresql://versa:versa@postgres:5432/versa
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-minioadmin123}
+      - MINIO_SECURE=false
+      - MINIO_PUBLIC_URL=${MINIO_PUBLIC_URL:-http://localhost:9000}
+      - MINIO_BUCKET_PDF=pdfs
+      - MINIO_BUCKET_AUDIOBOOKS=audiobooks
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost}
+      - SECRET_KEY=${SECRET_KEY:-change-this-in-production}
+      - REDIS_URL=redis://redis:6379/0
+      - YOUTUBE_CLIENT_ID=${YOUTUBE_CLIENT_ID:-}
+      - YOUTUBE_CLIENT_SECRET=${YOUTUBE_CLIENT_SECRET:-}
+      - YOUTUBE_REFRESH_TOKEN=${YOUTUBE_REFRESH_TOKEN:-}
+      - YOUTUBE_PRIVACY=${YOUTUBE_PRIVACY:-unlisted}
+      - YOUTUBE_CATEGORY_ID=${YOUTUBE_CATEGORY_ID:-22}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     volumes:
       - backend_data:/app/data
     networks:
@@ -24,11 +95,47 @@ services:
       retries: 3
       start_period: 40s
 
-  # Frontend service
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: versa-celery
+    command: >
+      celery -A app.core.celery_app worker
+      --loglevel=info
+      --concurrency=1
+      --queues=celery
+    environment:
+      - PYTHONPATH=/app
+      - DATABASE_URL=postgresql://versa:versa@postgres:5432/versa
+      - REDIS_URL=redis://redis:6379/0
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-minioadmin123}
+      - MINIO_SECURE=false
+      - MINIO_PUBLIC_URL=${MINIO_PUBLIC_URL:-http://localhost:9000}
+      - YOUTUBE_CLIENT_ID=${YOUTUBE_CLIENT_ID:-}
+      - YOUTUBE_CLIENT_SECRET=${YOUTUBE_CLIENT_SECRET:-}
+      - YOUTUBE_REFRESH_TOKEN=${YOUTUBE_REFRESH_TOKEN:-}
+      - YOUTUBE_PRIVACY=${YOUTUBE_PRIVACY:-unlisted}
+      - YOUTUBE_CATEGORY_ID=${YOUTUBE_CATEGORY_ID:-22}
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    volumes:
+      - backend_data:/app/data
+    networks:
+      - versa-network
+    restart: unless-stopped
+
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        - VITE_API_URL=/api/v1
     container_name: versa-frontend
     ports:
       - "80:80"
@@ -49,5 +156,9 @@ networks:
     driver: bridge
 
 volumes:
+  postgres_data:
+    driver: local
+  minio_data:
+    driver: local
   backend_data:
     driver: local

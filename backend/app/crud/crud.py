@@ -99,7 +99,11 @@ def create_pdf_book(db: Session, book: PDFBookCreate, file_path: str, original_f
 def update_pdf_book(db: Session, book_id: int, book_update: PDFBookUpdate) -> Optional[PDFBook]:
     db_book = db.query(PDFBook).filter(PDFBook.id == book_id).first()
     if db_book:
-        update_data = book_update.model_dump(exclude_unset=True)
+        # Handle both Pydantic models and dicts
+        if isinstance(book_update, dict):
+            update_data = {k: v for k, v in book_update.items() if v is not None}
+        else:
+            update_data = book_update.model_dump(exclude_unset=True)
         for field, value in update_data.items():
             setattr(db_book, field, value)
         db.commit()

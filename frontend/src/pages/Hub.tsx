@@ -60,10 +60,8 @@ const Hub: React.FC = () => {
     priority: 1,
   });
   const [showAddForm, setShowAddForm] = useState(false);
-  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    setMounted(true);
     loadTasks();
   }, []);
 

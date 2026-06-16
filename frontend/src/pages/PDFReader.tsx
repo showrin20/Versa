@@ -1,11 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { pdfBooksAPI, readingSessionsAPI } from '../services/api';
+import { pdfBooksAPI, readingSessionsAPI, audiobooksAPI } from '../services/api';
 import type { PDFBook, ReadingSession, ReadingSessionCreate } from '../types';
+import { useTheme } from '../context/ThemeContext';
 
 declare global {
   interface Window {
     pdfjsLib: any;
-    speechSynthesis: SpeechSynthesis;
   }
 }
 
@@ -29,7 +29,7 @@ interface NarratorPreset {
   color: string;
 }
 
-const API_BASE_URL = 'http://localhost:8000/api/v1';
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1';
 
 const NARRATORS: NarratorPreset[] = [
   {
@@ -113,6 +113,7 @@ const extractChunksFromPageText = (pageText: string, pageNumber: number): Chunk[
 };
 
 const PDFReader: React.FC = () => {
+  const { theme } = useTheme();
   const [books, setBooks] = useState<PDFBook[]>([]);
   const [sessions, setSessions] = useState<ReadingSession[]>([]);
   const [activeBook, setActiveBook] = useState<PDFBook | null>(null);
@@ -152,6 +153,13 @@ const PDFReader: React.FC = () => {
   const [audioGenProgress, setAudioGenProgress] = useState(0);
   const [audioDownloadUrl, setAudioDownloadUrl] = useState<string | null>(null);
 
+  const [ytState, setYtState] = useState<string | null>(null);
+  const [ytCurrentPart, setYtCurrentPart] = useState(0);
+  const [ytTotalParts, setYtTotalParts] = useState(0);
+  const [ytVideoIds, setYtVideoIds] = useState<string[]>([]);
+  const [ytPlaylistUrl, setYtPlaylistUrl] = useState<string | null>(null);
+  const ytPollRef = useRef<number | null>(null);
+
   const [pageAnim, setPageAnim] = useState<'idle' | 'forward' | 'backward'>('idle');
   const [showPdfView, setShowPdfView] = useState(true);
 
@@ -180,6 +188,7 @@ const PDFReader: React.FC = () => {
     }
     return () => {
       if (timerRef.current) window.clearInterval(timerRef.current);
+      if (ytPollRef.current) window.clearInterval(ytPollRef.current);
       if (typeof window !== 'undefined' && window.speechSynthesis) {
         window.speechSynthesis.cancel();
         window.speechSynthesis.onvoiceschanged = null;
@@ -212,6 +221,28 @@ const PDFReader: React.FC = () => {
     const normalized = pageFromChunk % 2 === 0 ? Math.max(1, pageFromChunk - 1) : pageFromChunk;
     setCurrentPageNum(normalized);
   }, [currentChunk, chunks]);
+
+  const YT_ACTIVE_STATES = ['pending', 'uploading', 'playlist_pending'];
+  useEffect(() => {
+    if (!activeBook || !YT_ACTIVE_STATES.includes(ytState || '')) {
+      if (ytPollRef.current) { window.clearInterval(ytPollRef.current); ytPollRef.current = null; }
+      return;
+    }
+    ytPollRef.current = window.setInterval(async () => {
+      try {
+        const status = await audiobooksAPI.getYouTubeStatus(activeBook.id);
+        setYtState(status.state);
+        setYtCurrentPart(status.current_part ?? 0);
+        setYtTotalParts(status.total_parts ?? 0);
+        setYtVideoIds(status.video_ids ?? []);
+        setYtPlaylistUrl(status.playlist_url ?? null);
+        if (!YT_ACTIVE_STATES.includes(status.state || '')) {
+          window.clearInterval(ytPollRef.current!); ytPollRef.current = null;
+        }
+      } catch (e) { console.error('YouTube status poll failed', e); }
+    }, 3000);
+    return () => { if (ytPollRef.current) { window.clearInterval(ytPollRef.current); ytPollRef.current = null; } };
+  }, [activeBook, ytState]);
 
   const renderPageToCanvas = useCallback(
     async (pageNum: number, canvas: HTMLCanvasElement | null) => {
@@ -294,7 +325,22 @@ const PDFReader: React.FC = () => {
       setIsProcessing(true);
       setLoadingText(`Opening "${book.name}"...`);
       setIsReading(true); setActiveBook(book); setChunks([]);
-      setAudioDownloadUrl((book as any).audiobook_url || null);
+
+      if (book.audiobook_path) {
+        setAudioDownloadUrl(`${API_BASE_URL}/audiobooks/book/${book.id}/download`);
+      } else {
+        setAudioDownloadUrl(null);
+      }
+
+      // Restore YouTube upload state from DB
+      setYtState(book.youtube_upload_state ?? null);
+      setYtCurrentPart(book.youtube_current_part ?? 0);
+      setYtTotalParts(book.youtube_total_parts ?? 0);
+      setYtPlaylistUrl(book.youtube_playlist_url ?? null);
+      try {
+        setYtVideoIds(book.youtube_video_ids ? JSON.parse(book.youtube_video_ids) : []);
+      } catch { setYtVideoIds([]); }
+
       const session = await readingSessionsAPI.create({ book_id: book.id, chunks_read: 0, time_spent: 0 } as ReadingSessionCreate);
       setStoredSession(session); setSessionStartTime(new Date());
       const response = await fetch(`${API_BASE_URL}/pdf-books/${book.id}/download`);
@@ -441,25 +487,28 @@ const PDFReader: React.FC = () => {
   const downloadExistingAudiobook = () => {
     if (!audioDownloadUrl || !activeBook) return;
     const a = document.createElement('a');
-    a.href = audioDownloadUrl; a.download = `${activeBook.name}.mp3`; a.click();
+    // If it's a relative URL, prepend the backend base
+    const backendBase = API_BASE_URL.replace('/api/v1', '');
+    const fullUrl = audioDownloadUrl.startsWith('http') ? audioDownloadUrl : `${backendBase}${audioDownloadUrl}`;
+    a.href = fullUrl; a.download = `${activeBook.name}.mp3`; a.click();
   };
 
   const generateAudiobook = async () => {
     if (!activeBook) return;
     try {
       setIsGeneratingAudio(true); setAudioGenProgress(0);
-      
+
       // Collect all text from chunks to send to backend
       const fullText = chunks.map(chunk => chunk.text).join('\n\n');
-      
+
       const createRes = await fetch(`${API_BASE_URL}/audiobooks/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          book_id: activeBook.id, 
-          format: 'mp3', 
-          voice: selectedNarrator.backendVoice, 
-          style: selectedNarrator.backendStyle, 
+        body: JSON.stringify({
+          book_id: activeBook.id,
+          format: 'mp3',
+          voice: selectedNarrator.backendVoice,
+          style: selectedNarrator.backendStyle,
           narrator_id: selectedNarrator.id,
           text: fullText  // Send extracted text directly
         }),
@@ -477,10 +526,14 @@ const PDFReader: React.FC = () => {
         const status = await statusRes.json();
         setAudioGenProgress(Number(status.progress || 0));
         if (status.state === 'completed') {
-          const url = status.download_url || status.audio_url;
-          if (!url) throw new Error('Generation finished but no download URL was returned');
-          setAudioDownloadUrl(url); setAudioGenProgress(100); setIsGeneratingAudio(false);
-          const anchor = document.createElement('a'); anchor.href = url; anchor.download = `${activeBook.name}.mp3`; anchor.click();
+          // Use the book-specific download endpoint
+          const bookDownloadUrl = `${API_BASE_URL}/audiobooks/book/${activeBook.id}/download`;
+          setAudioDownloadUrl(bookDownloadUrl);
+          setAudioGenProgress(100);
+          setIsGeneratingAudio(false);
+
+          // Reload books to get updated audiobook_path
+          await loadBooks();
           return;
         }
         if (status.state === 'failed') throw new Error(status.error || 'Audiobook generation failed');
@@ -488,6 +541,20 @@ const PDFReader: React.FC = () => {
       throw new Error('Audiobook generation timed out');
     } catch (error: any) {
       console.error(error); window.alert(error?.message || 'Audiobook generation failed'); setIsGeneratingAudio(false);
+    }
+  };
+
+  const triggerYouTubeUpload = async () => {
+    if (!activeBook) return;
+    try {
+      const result = await audiobooksAPI.triggerYouTubeUpload(activeBook.id);
+      setYtState(result.state);
+      setYtCurrentPart(0);
+      setYtTotalParts(0);
+      setYtVideoIds([]);
+      setYtPlaylistUrl(null);
+    } catch (e: any) {
+      window.alert(e?.response?.data?.detail || 'Failed to start YouTube upload');
     }
   };
 
@@ -500,18 +567,23 @@ const PDFReader: React.FC = () => {
       if (activeBook && chunks.length > 0 && currentChunk >= chunks.length - 1) await pdfBooksAPI.update(activeBook.id, { status: 'completed' });
     } catch (error) { console.error(error); }
     finally {
+      if (ytPollRef.current) { window.clearInterval(ytPollRef.current); ytPollRef.current = null; }
       stopPreviewSpeech();
       setIsReading(false); setActiveBook(null); setChunks([]); setStoredSession(null); setSessionStartTime(null);
       setPdfDoc(null); setCurrentPageNum(1); setAudioGenProgress(0); setIsGeneratingAudio(false);
+      setYtState(null); setYtCurrentPart(0); setYtTotalParts(0); setYtVideoIds([]); setYtPlaylistUrl(null);
       await loadBooks(); await loadSessions();
     }
   };
 
   const renderCurrentContent = () => {
     if (chunks.length === 0) return null;
+    const readingColor = theme === 'light' ? '#1E293B' : '#E2E8F0';
+    const inactiveOpacity = theme === 'light' ? 0.45 : 0.42;
+
     if (mode === 'chunk') {
       return (
-        <div style={{ fontSize: `${fontSize}px`, lineHeight: 1.95, color: '#E2E8F0', fontFamily: "'Georgia', 'Times New Roman', serif" }}>
+        <div style={{ fontSize: `${fontSize}px`, lineHeight: 1.95, color: readingColor, fontFamily: "'Georgia', 'Times New Roman', serif" }}>
           {Array.from({ length: chunksPerRead }, (_, i) => chunks[currentChunk + i])
             .filter(Boolean)
             .map((chunk, index) => (
@@ -524,14 +596,14 @@ const PDFReader: React.FC = () => {
     }
     const sentences = chunks[currentChunk]?.text.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [chunks[currentChunk]?.text || ''];
     return (
-      <div style={{ fontSize: `${fontSize}px`, lineHeight: 1.95, color: '#E2E8F0', fontFamily: "'Georgia', 'Times New Roman', serif" }}>
+      <div style={{ fontSize: `${fontSize}px`, lineHeight: 1.95, color: readingColor, fontFamily: "'Georgia', 'Times New Roman', serif" }}>
         {sentences.map((sentence, idx) => {
           const active = idx >= currentSentence && idx < currentSentence + sentencesPerRead;
           return (
             <span key={`${idx}-${sentence.slice(0, 16)}`}
               style={{
                 background: active ? 'rgba(99,102,241,0.22)' : 'transparent',
-                opacity: active ? 1 : 0.42,
+                opacity: active ? 1 : inactiveOpacity,
                 borderRadius: '6px',
                 padding: active ? '2px 5px' : '0',
                 marginRight: '3px',
@@ -591,6 +663,73 @@ const PDFReader: React.FC = () => {
             linear-gradient(180deg, #0B1020 0%, #0A0F1A 100%);
           padding: 1.5rem 1rem;
           font-family: Inter, system-ui, sans-serif;
+        }
+
+        /* ── Light mode overrides ── */
+        .pdf-root.light-mode {
+          --text-main: #0F172A;
+          --text-muted: #334155;
+          --text-muted-2: #64748B;
+          --card-bg: rgba(255, 255, 255, 0.95);
+          --border: rgba(0,0,0,0.1);
+          --input-bg: rgba(0,0,0,0.04);
+          --input-border: rgba(0,0,0,0.15);
+          --btn-alt-bg: rgba(0,0,0,0.05);
+          --accent-transparent: rgba(99,102,241,0.12);
+          --modal-overlay: rgba(0,0,0,0.45);
+          --modal-bg: #FFFFFF;
+          --book-text: #1E293B;
+          background:
+            radial-gradient(circle at top, rgba(99,102,241,0.07), transparent 30%),
+            linear-gradient(180deg, #EEF2FF 0%, #F1F5FF 100%);
+        }
+        .pdf-root.light-mode .secondary-btn {
+          background: rgba(0,0,0,0.05);
+          border-color: rgba(0,0,0,0.12);
+          color: var(--text-muted);
+        }
+        .pdf-root.light-mode .secondary-btn:hover {
+          background: rgba(0,0,0,0.09);
+          border-color: rgba(0,0,0,0.2);
+          color: var(--text-main);
+        }
+        .pdf-root.light-mode .icon-btn {
+          background: rgba(0,0,0,0.05);
+          border-color: rgba(0,0,0,0.1);
+          color: var(--text-muted);
+        }
+        .pdf-root.light-mode .icon-btn:hover {
+          background: rgba(0,0,0,0.09);
+          color: var(--text-main);
+        }
+        .pdf-root.light-mode .book-nav-btn {
+          background: rgba(0,0,0,0.05);
+          border-color: rgba(0,0,0,0.1);
+          color: var(--text-muted);
+        }
+        .pdf-root.light-mode .book-nav-btn:hover:not(:disabled) {
+          background: rgba(0,0,0,0.09);
+          color: var(--text-main);
+        }
+        .pdf-root.light-mode .narrator-card {
+          background: rgba(0,0,0,0.03);
+          border-color: rgba(0,0,0,0.1);
+        }
+        .pdf-root.light-mode .narrator-card:hover {
+          border-color: rgba(0,0,0,0.18);
+        }
+        .pdf-root.light-mode .toggle-row {
+          background: rgba(0,0,0,0.04);
+          border-color: rgba(0,0,0,0.1);
+        }
+        .pdf-root.light-mode .toggle-row button { color: var(--text-muted); }
+        .pdf-root.light-mode .progress-bar { background: rgba(0,0,0,0.08); }
+        .pdf-root.light-mode .loading-spinner {
+          border-color: rgba(0,0,0,0.1);
+          border-top-color: var(--accent);
+        }
+        .pdf-root.light-mode .reading-body::-webkit-scrollbar-thumb {
+          background: rgba(99,102,241,0.35);
         }
 
         .glass-card {
@@ -796,6 +935,69 @@ const PDFReader: React.FC = () => {
         }
         @keyframes spin { to { transform: rotate(360deg); } }
 
+        .download-banner {
+          background: linear-gradient(135deg, rgba(99,102,241,0.12) 0%, rgba(139,92,246,0.12) 50%, rgba(16,185,129,0.1) 100%);
+          border: 1px solid rgba(99,102,241,0.3);
+          border-radius: 16px;
+          padding: 1.2rem 1.4rem;
+          margin-bottom: 0.85rem;
+          display: flex;
+          align-items: center;
+          gap: 1rem;
+          flex-wrap: wrap;
+          animation: bannerSlideIn 0.5s ease-out;
+          position: relative;
+          overflow: hidden;
+        }
+        .download-banner::before {
+          content: '';
+          position: absolute;
+          inset: 0;
+          background: linear-gradient(90deg, transparent 0%, rgba(99,102,241,0.05) 50%, transparent 100%);
+          animation: bannerShimmer 3s ease-in-out infinite;
+        }
+        @keyframes bannerSlideIn {
+          from { opacity: 0; transform: translateY(-10px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes bannerShimmer {
+          0%, 100% { opacity: 0; }
+          50% { opacity: 1; }
+        }
+        .download-btn {
+          background: linear-gradient(135deg, #10B981, #059669);
+          color: white;
+          border: none;
+          border-radius: 12px;
+          cursor: pointer;
+          font-weight: 700;
+          font-size: 0.92rem;
+          padding: 0.75rem 1.5rem;
+          transition: all 0.2s ease;
+          box-shadow: 0 6px 20px rgba(16,185,129,0.3);
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          white-space: nowrap;
+          position: relative;
+          z-index: 1;
+        }
+        .download-btn:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 10px 28px rgba(16,185,129,0.4);
+        }
+        .download-btn:active {
+          transform: translateY(0);
+        }
+        .download-btn-icon {
+          display: inline-block;
+          animation: downloadBounce 1.5s ease-in-out infinite;
+        }
+        @keyframes downloadBounce {
+          0%, 100% { transform: translateY(0); }
+          50% { transform: translateY(3px); }
+        }
+
         .settings-panel {
           display: grid;
           grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -864,7 +1066,7 @@ const PDFReader: React.FC = () => {
         }
       `}</style>
 
-      <div className="pdf-root">
+      <div className={`pdf-root${theme === 'light' ? ' light-mode' : ''}`}>
 
         {/* ─── Header ─── */}
         <div style={{ textAlign: 'center', marginBottom: '1.6rem' }}>
@@ -872,8 +1074,7 @@ const PDFReader: React.FC = () => {
             IMMERSIVE READER
           </div>
           <h1 style={{ color: 'var(--text-main)', fontSize: 'clamp(1.6rem, 4vw, 2.4rem)', margin: 0, fontWeight: 900, letterSpacing: '-0.02em' }}>
-            📚 Human-like PDF Audiobook Reader
-          </h1>
+            Focus Reader          </h1>
         </div>
 
         {/* ─── Library view ─── */}
@@ -897,7 +1098,13 @@ const PDFReader: React.FC = () => {
                   </div>
                   <div style={{ marginBottom: '1.1rem' }}>
                     <label style={{ color: 'var(--text-muted)', display: 'block', marginBottom: '0.4rem', fontSize: '0.85rem' }}>PDF file</label>
-                    <input type="file" accept=".pdf" onChange={(e) => setSelectedFile(e.target.files?.[0] || null)} required style={{ color: 'var(--text-muted)' }} />
+                    <input type="file" accept=".pdf" onChange={(e) => {
+                      const file = e.target.files?.[0] || null;
+                      setSelectedFile(file);
+                      if (file && !bookName.trim()) {
+                        setBookName(file.name.replace(/\.pdf$/i, ''));
+                      }
+                    }} required style={{ color: 'var(--text-muted)' }} />
                   </div>
                   <div style={{ display: 'flex', gap: '0.7rem' }}>
                     <button className="primary-btn" onClick={handleFileUpload as any} style={{ flex: 1, padding: '0.78rem 1rem' }}>Add book</button>
@@ -912,15 +1119,45 @@ const PDFReader: React.FC = () => {
                 const totalTime = getTotalTime(book.id);
                 const sessionsCount = getBookSessions(book.id).length;
                 const isEditing = editingBookId === book.id;
-                
+                const hasAudiobook = !!(book as any).audiobook_path;
+
                 return (
-                  <div key={book.id} className="glass-card" style={{ overflow: 'hidden' }}>
+                  <div
+                    key={book.id}
+                    className="glass-card"
+                    style={{ overflow: 'hidden', cursor: isEditing ? 'default' : 'pointer', transition: 'transform 0.18s ease, box-shadow 0.18s ease' }}
+                    onClick={() => { if (!isEditing) void startReading(book); }}
+                    onMouseEnter={(e) => { if (!isEditing) { (e.currentTarget as HTMLDivElement).style.transform = 'translateY(-4px)'; (e.currentTarget as HTMLDivElement).style.boxShadow = '0 16px 40px rgba(99,102,241,0.18)'; } }}
+                    onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.transform = ''; (e.currentTarget as HTMLDivElement).style.boxShadow = ''; }}
+                    title={isEditing ? '' : `Open "${book.name}"`}
+                  >
                     <div style={{ height: 5, background: 'var(--accent-gradient)' }} />
                     <div style={{ padding: '1.2rem' }}>
-                      <div style={{ fontSize: '1.8rem', marginBottom: '0.45rem' }}>{(book as any).status === 'completed' ? '✅' : '📘'}</div>
-                      
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.45rem' }}>
+                        <div style={{ fontSize: '1.8rem' }}>{(book as any).status === 'completed' ? '✅' : '📘'}</div>
+                        {hasAudiobook && (
+                          <div
+                            style={{
+                              fontSize: '0.7rem',
+                              padding: '0.3rem 0.6rem',
+                              background: 'linear-gradient(135deg, rgba(16,185,129,0.15), rgba(5,150,105,0.15))',
+                              border: '1px solid rgba(16,185,129,0.3)',
+                              borderRadius: '6px',
+                              color: '#10B981',
+                              fontWeight: 600,
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '0.3rem'
+                            }}
+                            title="Audiobook available"
+                          >
+                            🎧 Audio
+                          </div>
+                        )}
+                      </div>
+
                       {isEditing ? (
-                        <div style={{ marginBottom: '0.9rem' }}>
+                        <div style={{ marginBottom: '0.9rem' }} onClick={(e) => e.stopPropagation()}>
                           <input
                             type="text"
                             value={editingBookName}
@@ -946,14 +1183,14 @@ const PDFReader: React.FC = () => {
                             <button
                               className="primary-btn"
                               style={{ flex: 1, padding: '0.4rem 0.6rem', fontSize: '0.75rem' }}
-                              onClick={() => handleRenameBook(book.id)}
+                              onClick={(e) => { e.stopPropagation(); handleRenameBook(book.id); }}
                             >
                               Save
                             </button>
                             <button
                               className="secondary-btn"
                               style={{ flex: 1, padding: '0.4rem 0.6rem', fontSize: '0.75rem' }}
-                              onClick={cancelEditingBook}
+                              onClick={(e) => { e.stopPropagation(); cancelEditingBook(); }}
                             >
                               Cancel
                             </button>
@@ -965,7 +1202,7 @@ const PDFReader: React.FC = () => {
                           <p style={{ color: 'var(--text-muted-2)', fontSize: '0.76rem', margin: '0 0 0.9rem 0' }}>{book.original_filename}</p>
                         </>
                       )}
-                      
+
                       <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)', fontSize: '0.78rem', marginBottom: '0.5rem' }}>
                         <span>{Number((book as any).progress_percentage || 0).toFixed(0)}% read</span>
                         <span>{totalTime}m · {sessionsCount} sessions</span>
@@ -973,25 +1210,25 @@ const PDFReader: React.FC = () => {
                       <div className="progress-bar" style={{ height: 6, marginBottom: '0.9rem' }}>
                         <div style={{ width: `${Number((book as any).progress_percentage || 0)}%` }} />
                       </div>
-                      
-                      <div style={{ display: 'flex', gap: '0.5rem' }}>
+
+                      <div style={{ display: 'flex', gap: '0.5rem' }} onClick={(e) => e.stopPropagation()}>
                         <button className="primary-btn" style={{ flex: 1, padding: '0.75rem 1rem' }} onClick={() => void startReading(book)}>
                           {(book as any).current_chunk ? 'Continue reading' : 'Start reading'}
                         </button>
                       </div>
-                      
-                      <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.6rem' }}>
+
+                      <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.6rem' }} onClick={(e) => e.stopPropagation()}>
                         <button
                           className="secondary-btn"
                           style={{ flex: 1, padding: '0.5rem', fontSize: '0.75rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.3rem' }}
-                          onClick={() => startEditingBook(book.id, book.name)}
+                          onClick={(e) => { e.stopPropagation(); startEditingBook(book.id, book.name); }}
                         >
                           ✏️ Rename
                         </button>
                         <button
                           className="secondary-btn"
                           style={{ flex: 1, padding: '0.5rem', fontSize: '0.75rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.3rem', color: '#ef4444', borderColor: 'rgba(239, 68, 68, 0.3)' }}
-                          onClick={() => handleDeleteBook(book.id, book.name)}
+                          onClick={(e) => { e.stopPropagation(); handleDeleteBook(book.id, book.name); }}
                         >
                           🗑️ Delete
                         </button>
@@ -1059,6 +1296,136 @@ const PDFReader: React.FC = () => {
                     <div style={{ width: `${progressPct}%` }} />
                   </div>
                 </div>
+
+                {/* ─── Download Banner (shown after generation completes) ─── */}
+                {audioDownloadUrl && !isGeneratingAudio && (
+                  <div className="download-banner">
+                    <div style={{ fontSize: '2rem', flexShrink: 0, position: 'relative', zIndex: 1 }}>🎧</div>
+                    <div style={{ flex: 1, minWidth: 0, position: 'relative', zIndex: 1 }}>
+                      <div style={{ fontWeight: 700, color: 'var(--text-main)', fontSize: '0.95rem', marginBottom: '0.2rem' }}>
+                        Audiobook Ready!
+                      </div>
+                      <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                        <span style={{ fontWeight: 600, color: '#A5B4FC' }}>{activeBook?.name}</span>
+                        {' · '}
+                        Narrated by {selectedNarrator.emoji} {selectedNarrator.name}
+                      </div>
+                    </div>
+                    <button className="download-btn" onClick={downloadExistingAudiobook}>
+                      <span className="download-btn-icon">⬇</span> Download MP3
+                    </button>
+                    <button
+                      className="secondary-btn"
+                      style={{ padding: '0.6rem 0.9rem', fontSize: '0.8rem', position: 'relative', zIndex: 1 }}
+                      onClick={() => setAudioDownloadUrl(null)}
+                      title="Dismiss"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                )}
+
+                {/* ─── Audio Generation Progress Banner ─── */}
+                {isGeneratingAudio && (
+                  <div className="download-banner" style={{ borderColor: 'rgba(139,92,246,0.3)' }}>
+                    <div style={{ fontSize: '2rem', flexShrink: 0, position: 'relative', zIndex: 1 }}>
+                      <span style={{ display: 'inline-block', animation: 'spin 2s linear infinite' }}>🎵</span>
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0, position: 'relative', zIndex: 1 }}>
+                      <div style={{ fontWeight: 700, color: 'var(--text-main)', fontSize: '0.95rem', marginBottom: '0.45rem' }}>
+                        Generating Audiobook...
+                      </div>
+                      <div className="progress-bar" style={{ height: 8, marginBottom: '0.3rem' }}>
+                        <div style={{ width: `${audioGenProgress}%` }} />
+                      </div>
+                      <div style={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>
+                        {audioGenProgress}% · {selectedNarrator.emoji} {selectedNarrator.name} voice
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* ─── YouTube Upload Banner ─── */}
+                {ytState && ytState !== null && (
+                  <div className="download-banner" style={{
+                    borderColor: ytState === 'completed' ? 'rgba(239,68,68,0.35)'
+                      : ytState === 'partial' ? 'rgba(245,158,11,0.35)'
+                      : ytState === 'failed' ? 'rgba(239,68,68,0.25)'
+                      : 'rgba(239,68,68,0.3)',
+                    background: 'linear-gradient(135deg, rgba(239,68,68,0.08) 0%, rgba(220,38,38,0.06) 100%)',
+                  }}>
+                    <div style={{ fontSize: '1.6rem', flexShrink: 0, position: 'relative', zIndex: 1 }}>
+                      {ytState === 'completed' ? '▶' : ytState === 'failed' ? '✗' : ytState === 'partial' ? '⚠' : '⏫'}
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0, position: 'relative', zIndex: 1 }}>
+                      {(ytState === 'pending' || ytState === 'uploading' || ytState === 'playlist_pending') && (
+                        <>
+                          <div style={{ fontWeight: 700, color: 'var(--text-main)', fontSize: '0.92rem', marginBottom: '0.35rem' }}>
+                            {ytState === 'playlist_pending'
+                              ? 'Creating YouTube Playlist...'
+                              : ytTotalParts > 1 && ytCurrentPart > 0
+                                ? `Uploading Part ${ytCurrentPart} of ${ytTotalParts}...`
+                                : 'Uploading to YouTube...'}
+                          </div>
+                          {ytTotalParts > 1 && (
+                            <>
+                              <div className="progress-bar" style={{ height: 7, marginBottom: '0.3rem' }}>
+                                <div style={{ width: `${ytTotalParts > 0 ? Math.round(((ytCurrentPart - 1) / ytTotalParts) * 100) : 0}%`, background: 'linear-gradient(90deg,#ef4444,#dc2626)' }} />
+                              </div>
+                              <div style={{ color: 'var(--text-muted)', fontSize: '0.76rem' }}>
+                                {ytCurrentPart > 0 ? `Part ${ytCurrentPart}/${ytTotalParts}` : 'Preparing...'} · {ytVideoIds.length} uploaded
+                              </div>
+                            </>
+                          )}
+                          {ytTotalParts === 1 && (
+                            <div style={{ color: 'var(--text-muted)', fontSize: '0.76rem' }}>
+                              <span style={{ display: 'inline-block', animation: 'spin 1.5s linear infinite', marginRight: '0.4rem' }}>↻</span>
+                              Uploading single-part audiobook...
+                            </div>
+                          )}
+                        </>
+                      )}
+                      {(ytState === 'completed' || ytState === 'partial') && (
+                        <>
+                          <div style={{ fontWeight: 700, color: 'var(--text-main)', fontSize: '0.92rem', marginBottom: '0.3rem' }}>
+                            {ytState === 'completed'
+                              ? (ytTotalParts > 1 ? `YouTube Upload Complete (${ytVideoIds.length} parts)` : 'YouTube Upload Complete')
+                              : `Partial Upload (${ytVideoIds.length}/${ytTotalParts} parts)`}
+                          </div>
+                          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.35rem' }}>
+                            {ytPlaylistUrl && (
+                              <a href={ytPlaylistUrl} target="_blank" rel="noopener noreferrer"
+                                style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.42rem 0.9rem', background: 'linear-gradient(135deg,#ef4444,#dc2626)', color: 'white', borderRadius: 9, textDecoration: 'none', fontSize: '0.82rem', fontWeight: 700, boxShadow: '0 4px 12px rgba(239,68,68,0.3)' }}>
+                                ▶ View Playlist
+                              </a>
+                            )}
+                            {!ytPlaylistUrl && ytVideoIds.length === 1 && (
+                              <a href={`https://www.youtube.com/watch?v=${ytVideoIds[0]}`} target="_blank" rel="noopener noreferrer"
+                                style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.42rem 0.9rem', background: 'linear-gradient(135deg,#ef4444,#dc2626)', color: 'white', borderRadius: 9, textDecoration: 'none', fontSize: '0.82rem', fontWeight: 700, boxShadow: '0 4px 12px rgba(239,68,68,0.3)' }}>
+                                ▶ Watch on YouTube
+                              </a>
+                            )}
+                            {!ytPlaylistUrl && ytVideoIds.length > 1 && ytVideoIds.map((vid, i) => (
+                              <a key={vid} href={`https://www.youtube.com/watch?v=${vid}`} target="_blank" rel="noopener noreferrer"
+                                style={{ padding: '0.32rem 0.65rem', background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444', borderRadius: 7, textDecoration: 'none', fontSize: '0.78rem', fontWeight: 600 }}>
+                                Part {i + 1}
+                              </a>
+                            ))}
+                          </div>
+                        </>
+                      )}
+                      {ytState === 'failed' && (
+                        <div style={{ color: '#ef4444', fontSize: '0.85rem', fontWeight: 600 }}>
+                          Upload failed — check YouTube credentials in your environment config.
+                        </div>
+                      )}
+                    </div>
+                    {(ytState === 'completed' || ytState === 'partial' || ytState === 'failed') && (
+                      <button className="secondary-btn" style={{ padding: '0.5rem 0.7rem', fontSize: '0.78rem', position: 'relative', zIndex: 1 }}
+                        onClick={() => setYtState(null)} title="Dismiss">✕</button>
+                    )}
+                  </div>
+                )}
 
                 {/* Settings panel (collapsible) */}
                 {showSettings && (
@@ -1149,6 +1516,16 @@ const PDFReader: React.FC = () => {
                           {audioDownloadUrl && !isGeneratingAudio && (
                             <button className="secondary-btn" style={{ padding: '0.6rem 1rem' }} onClick={downloadExistingAudiobook}>⬇ MP3</button>
                           )}
+                          {audioDownloadUrl && !isGeneratingAudio && !['pending','uploading','playlist_pending'].includes(ytState || '') && (
+                            <button
+                              className="secondary-btn"
+                              style={{ padding: '0.6rem 1rem', display: 'flex', alignItems: 'center', gap: '0.4rem', borderColor: 'rgba(239,68,68,0.35)', color: '#ef4444' }}
+                              onClick={() => void triggerYouTubeUpload()}
+                              title="Upload audiobook to YouTube"
+                            >
+                              ▶ YouTube
+                            </button>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -1207,54 +1584,54 @@ const PDFReader: React.FC = () => {
 
 
 
-                  {/* LEFT: Large book view + page nav */}
-                  <div className="book-panel">
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-                      <span style={{ color: 'var(--text-muted-2)', fontSize: '0.76rem', fontWeight: 600, letterSpacing: '0.1em' }}>PDF VIEW</span>
-                      <button className="secondary-btn" style={{ padding: '0.28rem 0.7rem', fontSize: '0.76rem' }} onClick={() => setShowPdfView((v) => !v)}>
-                        {showPdfView ? 'Hide' : 'Show'}
-                      </button>
-                    </div>
-
-                    {showPdfView && (
-                      <div className={`book-shell ${pageAnim === 'forward' ? 'book-page-forward' : pageAnim === 'backward' ? 'book-page-backward' : ''}`}>
-                        <div className="book-spine-line" />
-                        <div className="book-spread">
-                          <div className="book-page left">
-                            <canvas ref={leftCanvasRef} className="page-canvas" />
-                            <div className="book-page-num">{currentPageNum}</div>
-                          </div>
-                          <div className="book-page right">
-                            <canvas ref={rightCanvasRef} className="page-canvas" />
-                            <div className="book-page-num">{rightPage}</div>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Page navigation right below book */}
-                    <div className="book-nav-row" style={{ padding: '0.7rem 0 0' }}>
-                      <button className="book-nav-btn" style={{ padding: '0.6rem 1.4rem', fontSize: '0.9rem' }} onClick={prevItem} disabled={isAtStart}>← Prev</button>
-                      <div style={{ textAlign: 'center' }}>
-                        <div style={{ color: 'var(--text-muted)', fontSize: '0.9rem', fontWeight: 700 }}>
-                          {currentChunk + 1} <span style={{ color: 'var(--text-muted-2)', fontWeight: 400 }}>/ {chunks.length}</span>
-                        </div>
-                        <div style={{ color: 'var(--text-muted-2)', fontSize: '0.72rem' }}>chunk position</div>
-                      </div>
-                      <button className="book-nav-btn accent" style={{ padding: '0.6rem 1.4rem', fontSize: '0.9rem' }} onClick={nextItem} disabled={isAtEnd}>Next →</button>
-                    </div>
-
-                    {/* Quick page jump */}
-                    <div style={{ marginTop: '0.55rem', display: 'flex', gap: '0.45rem', alignItems: 'center' }}>
-                      <div style={{ color: 'var(--text-muted-2)', fontSize: '0.75rem', whiteSpace: 'nowrap' }}>Pg {currentPageNum}/{maxPage}</div>
-                      <div style={{ flex: 1 }}>
-                        <div className="progress-bar" style={{ height: 4 }}>
-                          <div style={{ width: `${progressPct}%` }} />
-                        </div>
-                      </div>
-                      <button className="secondary-btn" style={{ padding: '0.28rem 0.6rem', fontSize: '0.73rem' }} onClick={() => setShowPageJump(true)}>↗</button>
-                    </div>
+                {/* LEFT: Large book view + page nav */}
+                <div className="book-panel">
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                    <span style={{ color: 'var(--text-muted-2)', fontSize: '0.76rem', fontWeight: 600, letterSpacing: '0.1em' }}>PDF VIEW</span>
+                    <button className="secondary-btn" style={{ padding: '0.28rem 0.7rem', fontSize: '0.76rem' }} onClick={() => setShowPdfView((v) => !v)}>
+                      {showPdfView ? 'Hide' : 'Show'}
+                    </button>
                   </div>
+
+                  {showPdfView && (
+                    <div className={`book-shell ${pageAnim === 'forward' ? 'book-page-forward' : pageAnim === 'backward' ? 'book-page-backward' : ''}`}>
+                      <div className="book-spine-line" />
+                      <div className="book-spread">
+                        <div className="book-page left">
+                          <canvas ref={leftCanvasRef} className="page-canvas" />
+                          <div className="book-page-num">{currentPageNum}</div>
+                        </div>
+                        <div className="book-page right">
+                          <canvas ref={rightCanvasRef} className="page-canvas" />
+                          <div className="book-page-num">{rightPage}</div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Page navigation right below book */}
+                  <div className="book-nav-row" style={{ padding: '0.7rem 0 0' }}>
+                    <button className="book-nav-btn" style={{ padding: '0.6rem 1.4rem', fontSize: '0.9rem' }} onClick={prevItem} disabled={isAtStart}>← Prev</button>
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{ color: 'var(--text-muted)', fontSize: '0.9rem', fontWeight: 700 }}>
+                        {currentChunk + 1} <span style={{ color: 'var(--text-muted-2)', fontWeight: 400 }}>/ {chunks.length}</span>
+                      </div>
+                      <div style={{ color: 'var(--text-muted-2)', fontSize: '0.72rem' }}>chunk position</div>
+                    </div>
+                    <button className="book-nav-btn accent" style={{ padding: '0.6rem 1.4rem', fontSize: '0.9rem' }} onClick={nextItem} disabled={isAtEnd}>Next →</button>
+                  </div>
+
+                  {/* Quick page jump */}
+                  <div style={{ marginTop: '0.55rem', display: 'flex', gap: '0.45rem', alignItems: 'center' }}>
+                    <div style={{ color: 'var(--text-muted-2)', fontSize: '0.75rem', whiteSpace: 'nowrap' }}>Pg {currentPageNum}/{maxPage}</div>
+                    <div style={{ flex: 1 }}>
+                      <div className="progress-bar" style={{ height: 4 }}>
+                        <div style={{ width: `${progressPct}%` }} />
+                      </div>
+                    </div>
+                    <button className="secondary-btn" style={{ padding: '0.28rem 0.6rem', fontSize: '0.73rem' }} onClick={() => setShowPageJump(true)}>↗</button>
+                  </div>
+                </div>
               </>
 
 

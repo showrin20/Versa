@@ -10,9 +10,10 @@ import type {
   PDFBookUpdate,
   ReadingSession,
   ReadingSessionCreate,
+  YouTubeUploadStatus,
 } from '../types';
 
-const API_BASE_URL = 'http://localhost:8000/api/v1';
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -112,6 +113,15 @@ export const readingSessionsAPI = {
   
   delete: (id: number): Promise<void> =>
     api.delete(`/reading-sessions/${id}`).then(res => res.data),
+};
+
+// Audiobooks API (YouTube upload / status)
+export const audiobooksAPI = {
+  triggerYouTubeUpload: (bookId: number): Promise<{ job_id: string; state: string }> =>
+    api.post(`/audiobooks/book/${bookId}/upload-youtube`).then(res => res.data),
+
+  getYouTubeStatus: (bookId: number): Promise<YouTubeUploadStatus> =>
+    api.get(`/audiobooks/book/${bookId}/youtube-status`).then(res => res.data),
 };
 
 export default api;

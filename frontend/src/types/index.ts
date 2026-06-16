@@ -75,8 +75,23 @@ export interface PDFBook {
   progress_percentage: number;
   reading_mode: string;
   status: string;
+  audiobook_path?: string;
+  youtube_upload_state?: string;
+  youtube_video_ids?: string;
+  youtube_playlist_url?: string;
+  youtube_current_part?: number;
+  youtube_total_parts?: number;
   created_at: string;
   updated_at?: string;
+}
+
+export interface YouTubeUploadStatus {
+  state: string | null;
+  current_part: number | null;
+  total_parts: number | null;
+  video_ids: string[];
+  playlist_url: string | null;
+  job_id: string | null;
 }
 
 export interface PDFBookCreate {
